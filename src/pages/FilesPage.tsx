@@ -113,10 +113,15 @@ export default function FilesPage() {
       }
       return null;
     }).then((text: string | null) => {
-      console.log(`[FilesPage] readFile done in ${(performance.now() - t0).toFixed(0)}ms, ${text ? text.length + ' chars' : 'null'}`);
-      if (text != null) {
-        setContent(text);
-        setOriginalContent(text);
+      // CachedFileSystem drops the encoding parameter, so the backend may return
+      // Uint8Array instead of a decoded string. Decode defensively.
+      const decoded = text != null
+        ? (typeof text === 'string' ? text : new TextDecoder().decode(text as Uint8Array))
+        : null;
+      console.log(`[FilesPage] readFile done in ${(performance.now() - t0).toFixed(0)}ms, ${decoded ? decoded.length + ' chars' : 'null'}`);
+      if (decoded != null) {
+        setContent(decoded);
+        setOriginalContent(decoded);
         setSelectedPath(effectivePath);
       } else {
         setContent('');
@@ -131,8 +136,9 @@ export default function FilesPage() {
     // Load version info
     import('zen-fs-config').then(({ versionPathFor }) => {
       const vp = versionPathFor(effectivePath);
-      repo.rootFS.promises.readFile(vp, 'utf-8').then((v: string) => {
-        setVersionInfo(JSON.parse(v));
+      repo.rootFS.promises.readFile(vp, 'utf-8').then((v: any) => {
+        const str = typeof v === 'string' ? v : new TextDecoder().decode(v as Uint8Array);
+        setVersionInfo(JSON.parse(str));
       }).catch(() => setVersionInfo(null));
     });
   }, [repo, effectivePath]);
