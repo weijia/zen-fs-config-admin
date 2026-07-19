@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
+import { versionDisplay, buildTimeDisplay } from '../version';
 import '../styles/global.css';
 
 const navItems = [
@@ -76,6 +77,7 @@ export default function Layout() {
             <span>App: {repo.appId}</span>
           </>
         )}
+        <span style={{ marginLeft: 'auto' }}>{versionDisplay} | {buildTimeDisplay}</span>
       </div>
     </div>
   );
