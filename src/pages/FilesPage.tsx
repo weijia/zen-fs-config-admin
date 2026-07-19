@@ -14,7 +14,7 @@ async function buildTree(fs: any, dir: string): Promise<TreeNode[]> {
   try {
     const items = await fs.readdir(dir);
     for (const item of items) {
-      if (item.startsWith('.')) continue;
+      // Don't hide .meta — it contains backends.json, sync-rules.json
       const fullPath = dir === '/' ? `/${item}` : `${dir}/${item}`;
       try {
         const stat = await fs.stat(fullPath);
@@ -74,7 +74,8 @@ export default function FilesPage() {
 
   const refreshTree = useCallback(async () => {
     if (!repo) return;
-    const rootNodes = await buildTree(repo.fs.promises, '/');
+    // Use rootFS (no chroot) so /.meta/, /shared/, /nodes/, /<appId>/ all visible
+    const rootNodes = await buildTree(repo.rootFS.promises, '/');
     setTree(rootNodes);
   }, [repo]);
 
@@ -84,9 +85,9 @@ export default function FilesPage() {
 
   useEffect(() => {
     if (!repo || !effectivePath) return;
-    repo.fs.promises.stat(effectivePath).then((s: any) => {
+    repo.rootFS.promises.stat(effectivePath).then((s: any) => {
       if (s.isFile()) {
-        return repo.fs.promises.readFile(effectivePath, 'utf-8');
+        return repo.rootFS.promises.readFile(effectivePath, 'utf-8');
       }
       return null;
     }).then((text: string | null) => {
@@ -106,7 +107,7 @@ export default function FilesPage() {
     // Load version info
     import('zen-fs-config').then(({ versionPathFor }) => {
       const vp = versionPathFor(effectivePath);
-      repo.fs.promises.readFile(vp, 'utf-8').then((v: string) => {
+      repo.rootFS.promises.readFile(vp, 'utf-8').then((v: string) => {
         setVersionInfo(JSON.parse(v));
       }).catch(() => setVersionInfo(null));
     });
@@ -131,11 +132,19 @@ export default function FilesPage() {
     setSaving(true);
     setMessage('');
     try {
-      let data: unknown = content;
-      if (isJson) {
-        data = JSON.parse(content);
+      // For .meta/ and other non-app files, write directly via rootFS.
+      // For app config files (under /<appId>/), use setConfig for versioning.
+      const appId = repo.appId;
+      const isInAppDir = effectivePath.startsWith(`/${appId}/`);
+      if (isInAppDir) {
+        let data: unknown = content;
+        if (isJson) data = JSON.parse(content);
+        repo.setConfig(effectivePath.slice(`/${appId}`.length), data);
+      } else {
+        // Direct write (e.g. /.meta/backends.json, /shared/xxx)
+        const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
+        await repo.rootFS.promises.writeFile(effectivePath, data);
       }
-      repo.setConfig(effectivePath, data);
       setMessage('Saved');
       setOriginalContent(content);
       refreshTree();
