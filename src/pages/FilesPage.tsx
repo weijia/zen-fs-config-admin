@@ -9,23 +9,31 @@ interface TreeNode {
   children: TreeNode[];
 }
 
-async function buildTree(fs: any, dir: string): Promise<TreeNode[]> {
+async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
+  const indent = '  '.repeat(depth);
+  console.log(`[buildTree] readdir(${dir})...`);
   const entries: TreeNode[] = [];
   try {
     const items = await fs.readdir(dir);
+    console.log(`[buildTree] readdir(${dir}) => ${items.length} items:`, items);
     for (const item of items) {
-      // Don't hide .meta — it contains backends.json, sync-rules.json
       const fullPath = dir === '/' ? `/${item}` : `${dir}/${item}`;
       try {
         const stat = await fs.stat(fullPath);
+        console.log(`${indent}[buildTree] stat(${fullPath}) => isDir=${stat.isDirectory()}, size=${stat.size}`);
         const node: TreeNode = { name: item, path: fullPath, isDir: stat.isDirectory(), children: [] };
         if (node.isDir) {
-          node.children = await buildTree(fs, fullPath);
+          node.children = await buildTree(fs, fullPath, depth + 1);
         }
         entries.push(node);
-      } catch { /* skip */ }
+      } catch (err: any) {
+        console.warn(`${indent}[buildTree] stat(${fullPath}) failed:`, err.message);
+      }
     }
-  } catch { /* dir doesn't exist */ }
+  } catch (err: any) {
+    console.warn(`[buildTree] readdir(${dir}) failed:`, err.message);
+  }
+  console.log(`[buildTree] ${dir} => ${entries.length} entries`);
   return entries.sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     return a.name.localeCompare(b.name);
@@ -71,12 +79,23 @@ export default function FilesPage() {
   const [message, setMessage] = useState('');
   const [versionInfo, setVersionInfo] = useState<any>(null);
   const [expanded, setExpanded] = useState(new Set<string>());
+  const [loading, setLoading] = useState(false);
 
   const refreshTree = useCallback(async () => {
     if (!repo) return;
-    // Use rootFS (no chroot) so /.meta/, /shared/, /nodes/, /<appId>/ all visible
-    const rootNodes = await buildTree(repo.rootFS.promises, '/');
-    setTree(rootNodes);
+    setLoading(true);
+    console.log('[FilesPage] refreshTree start, rootFS:', !!repo.rootFS);
+    try {
+      const t0 = performance.now();
+      const rootNodes = await buildTree(repo.rootFS.promises, '/');
+      const t1 = performance.now();
+      console.log(`[FilesPage] refreshTree done in ${(t1 - t0).toFixed(0)}ms, ${rootNodes.length} root entries`);
+      setTree(rootNodes);
+    } catch (err: any) {
+      console.error('[FilesPage] refreshTree error:', err);
+    } finally {
+      setLoading(false);
+    }
   }, [repo]);
 
   useEffect(() => { refreshTree(); }, [refreshTree]);
@@ -85,12 +104,16 @@ export default function FilesPage() {
 
   useEffect(() => {
     if (!repo || !effectivePath) return;
+    console.log('[FilesPage] loading file:', effectivePath);
+    const t0 = performance.now();
     repo.rootFS.promises.stat(effectivePath).then((s: any) => {
+      console.log(`[FilesPage] stat(${effectivePath}) took ${(performance.now() - t0).toFixed(0)}ms, isFile=${s.isFile()}`);
       if (s.isFile()) {
         return repo.rootFS.promises.readFile(effectivePath, 'utf-8');
       }
       return null;
     }).then((text: string | null) => {
+      console.log(`[FilesPage] readFile done in ${(performance.now() - t0).toFixed(0)}ms, ${text ? text.length + ' chars' : 'null'}`);
       if (text != null) {
         setContent(text);
         setOriginalContent(text);
@@ -99,7 +122,8 @@ export default function FilesPage() {
         setContent('');
         setOriginalContent('');
       }
-    }).catch(() => {
+    }).catch((err: any) => {
+      console.warn('[FilesPage] load file error:', err.message);
       setContent('');
       setOriginalContent('');
     });
@@ -173,6 +197,7 @@ export default function FilesPage() {
   return (
     <div className="split-pane">
       <div className="split-pane-left">
+        {loading && <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 12 }}>Loading...</div>}
         <TreeView nodes={tree} selected={selectedPath} onSelect={handleSelect} />
       </div>
       <div className="split-pane-right">

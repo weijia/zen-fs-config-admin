@@ -88,11 +88,15 @@ export default function ConnectPage() {
           prefix: '/shared/',
           direction: 'bi-directional' as any,
           conflictStrategy: 'merge' as any,
-          replicas: backends.map(b => b.id),
+          replicas: backends.filter(b => !b.isPrimary).map(b => b.id),
         },
         { prefix: '/nodes/', direction: 'none' as any },
         { prefix: '/.meta/', direction: 'none' as any },
       ];
+
+      console.log('[ConnectPage] backends:', backends.map(b => ({ id: b.id, type: b.type, isPrimary: b.isPrimary })));
+      console.log('[ConnectPage] syncRules:', JSON.stringify(syncRules, null, 2));
+      console.log('[ConnectPage] primaryBackendId:', primary.id);
 
       const options: ConfigRepoOptions = {
         primaryBackendId: primary.id,
