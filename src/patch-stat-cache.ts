@@ -20,7 +20,6 @@ export function patchStatCache() {
   import('zen-fs-cache').then(({ CachedFileSystem }) => {
     if (!CachedFileSystem) return;
 
-    const origStat = CachedFileSystem.prototype.stat;
     CachedFileSystem.prototype.stat = async function (this: any, path: string) {
       const key = `stat:${path}`;
       const cached = await this.store.get(key);
