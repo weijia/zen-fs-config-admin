@@ -1,16 +1,15 @@
-/* eslint-disable no-restricted-globals */
+/// <reference lib="WebWorker" />
+import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching'
 
-// Skip waiting message handler
+// Skip waiting on message
 self.addEventListener('message', (event: ExtendableMessageEvent) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
-    (self as any).skipWaiting()
+    self.skipWaiting()
   }
 })
 
-// Import workbox
-const { precacheAndRoute, cleanupOutdatedCaches } = await import('workbox-precaching')
-
-// Precache
+// Precache all build artifacts (injected by workbox-build)
+// @ts-ignore __WB_MANIFEST is injected at build time
 precacheAndRoute(self.__WB_MANIFEST)
 
 // Clean up old caches
