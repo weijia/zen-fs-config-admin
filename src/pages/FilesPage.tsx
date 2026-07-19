@@ -19,9 +19,23 @@ async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
     for (const item of items) {
       const fullPath = dir === '/' ? `/${item}` : `${dir}/${item}`;
       try {
-        const stat = await fs.stat(fullPath);
-        console.log(`${indent}[buildTree] stat(${fullPath}) => isDir=${stat.isDirectory()}, size=${stat.size}`);
-        const node: TreeNode = { name: item, path: fullPath, isDir: stat.isDirectory(), children: [] };
+        let stat = await fs.stat(fullPath);
+        // CachedFileSystem.stat uses JSON.stringify which silently drops
+        // isFile/isDirectory function properties. When that happens stat
+        // may lack isDirectory(), so we try readdir as a fallback.
+        let isDir: boolean;
+        if (typeof stat.isDirectory === 'function') {
+          isDir = stat.isDirectory();
+        } else {
+          try {
+            await fs.readdir(fullPath);
+            isDir = true;
+          } catch {
+            isDir = false;
+          }
+        }
+        console.log(`${indent}[buildTree] stat(${fullPath}) => isDir=${isDir}, size=${stat.size}`);
+        const node: TreeNode = { name: item, path: fullPath, isDir, children: [] };
         if (node.isDir) {
           node.children = await buildTree(fs, fullPath, depth + 1);
         }
@@ -107,8 +121,11 @@ export default function FilesPage() {
     console.log('[FilesPage] loading file:', effectivePath);
     const t0 = performance.now();
     repo.rootFS.promises.stat(effectivePath).then((s: any) => {
-      console.log(`[FilesPage] stat(${effectivePath}) took ${(performance.now() - t0).toFixed(0)}ms, isFile=${s.isFile()}`);
-      if (s.isFile()) {
+      // CachedFileSystem.stat may return an object without isFile()/isDirectory()
+      // after JSON round-trip. Fall back to checking for the absence of isDirectory.
+      const isFile = typeof s.isFile === 'function' ? s.isFile() : !(typeof s.isDirectory === 'function' ? s.isDirectory() : s.isDirectory);
+      console.log(`[FilesPage] stat(${effectivePath}) took ${(performance.now() - t0).toFixed(0)}ms, isFile=${isFile}`);
+      if (isFile) {
         return repo.rootFS.promises.readFile(effectivePath, 'utf-8');
       }
       return null;
