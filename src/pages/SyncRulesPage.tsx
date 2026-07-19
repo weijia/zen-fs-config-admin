@@ -4,7 +4,7 @@ import type { SyncRule, SyncRulesMeta } from 'zen-fs-config';
 import { ConflictStrategy, SyncDirection } from 'zen-fs-sync';
 
 export default function SyncRulesPage() {
-  const { repo } = useConfigRepo();
+  const { repo, reconnect } = useConfigRepo();
   const [rules, setRules] = useState<SyncRule[]>([]);
   const [editing, setEditing] = useState<SyncRule | null>(null);
   const [isNew, setIsNew] = useState(false);
@@ -37,6 +37,7 @@ export default function SyncRulesPage() {
     await repo.updateSyncRules(meta);
     setEditing(null); setIsNew(false);
     await loadData();
+    await reconnect();
   };
 
   const handleDelete = async (prefix: string) => {
@@ -45,6 +46,7 @@ export default function SyncRulesPage() {
     const meta: SyncRulesMeta = { version: 1, rules: updated };
     await repo.updateSyncRules(meta);
     await loadData();
+    await reconnect();
   };
 
   const toggleReplica = (id: string) => {

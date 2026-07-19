@@ -4,7 +4,7 @@ import type { BackendDescriptor, BackendsMeta } from 'zen-fs-config';
 import { BACKEND_TYPES, getBackendTypeDef } from '../backend-types';
 
 export default function BackendsPage() {
-  const { repo } = useConfigRepo();
+  const { repo, reconnect } = useConfigRepo();
   const [backends, setBackends] = useState<BackendDescriptor[]>([]);
   const [editing, setEditing] = useState<BackendDescriptor | null>(null);
   const [isNew, setIsNew] = useState(false);
@@ -70,8 +70,9 @@ export default function BackendsPage() {
     }
     const meta: BackendsMeta = { version: 1, backends: updated };
     await repo.updateBackends(meta);
-    setEditing(null); setMessage('Saved'); setTimeout(() => setMessage(''), 2000);
+    setEditing(null); setMessage('Saved, reconnecting...'); setTimeout(() => setMessage(''), 2000);
     await loadBackends();
+    await reconnect();
   };
 
   const handleRemove = async (id: string) => {
@@ -79,6 +80,7 @@ export default function BackendsPage() {
     const updated = backends.filter(b => b.id !== id);
     await repo.updateBackends({ version: 1, backends: updated });
     await loadBackends();
+    await reconnect();
   };
 
   if (!repo) return <div className="loading">No repo connected</div>;
