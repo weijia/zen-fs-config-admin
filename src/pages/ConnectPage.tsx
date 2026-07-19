@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import type { ConfigRepoOptions, BackendDescriptor, SyncRule } from 'zen-fs-config';
 import { BACKEND_TYPES, getBackendTypeDef } from '../backend-types';
+import { versionDisplay, buildTimeDisplay } from '../version';
 
 interface BackendEntry {
   id: string;
@@ -194,6 +195,9 @@ export default function ConnectPage() {
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '10px', marginTop: 8 }} disabled={connecting} onClick={handleConnect}>
           {connecting ? 'Connecting...' : 'Connect'}
         </button>
+        <div style={{ marginTop: 12, textAlign: 'center', fontSize: 12, color: 'var(--text-muted)' }}>
+          {versionDisplay} | {buildTimeDisplay}
+        </div>
       </div>
     </div>
   );
