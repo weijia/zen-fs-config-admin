@@ -31,13 +31,16 @@ export default function BackendsPage() {
     setEditing(null);
     setIsNew(true);
     const def = getBackendTypeDef('IndexedDB')!;
-    setFormState({ id: '', type: 'IndexedDB', options: { ...def.defaultOptions }, description: '' });
+    const autoId = `${def.type.toLowerCase()}-${Date.now()}`;
+    setFormState({ id: autoId, type: 'IndexedDB', options: { ...def.defaultOptions }, description: '' });
   };
 
   const changeType = (type: string) => {
     const def = getBackendTypeDef(type);
+    const autoId = isNew ? `${type.toLowerCase()}-${Date.now()}` : (formState.id ?? '');
     setFormState({
       ...formState,
+      id: autoId,
       type,
       options: def ? { ...def.defaultOptions } : {},
     });
@@ -122,28 +125,38 @@ export default function BackendsPage() {
             <div className="modal-title">{isNew ? 'Add Backend' : `Edit: ${editing?.id}`}</div>
 
             <div className="form-group">
-              <label className="form-label">ID</label>
-              <input className="form-input" value={formState.id ?? ''} onChange={e => setFormState({ ...formState, id: e.target.value })} disabled={!isNew} />
-            </div>
-
-            <div className="form-group">
               <label className="form-label">Type</label>
               <select className="form-input" value={formState.type} onChange={e => changeType(e.target.value)} disabled={!isNew}>
                 {BACKEND_TYPES.map(bt => <option key={bt.type} value={bt.type}>{bt.icon} {bt.label}</option>)}
               </select>
             </div>
 
+            <div className="form-group">
+              <label className="form-label">ID</label>
+              <input className="form-input" value={formState.id ?? ''} onChange={e => setFormState({ ...formState, id: e.target.value })} disabled={!isNew} style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               {def?.fields.map(field => (
                 <div key={field.key} className="form-group" style={{ margin: 0 }}>
                   <label className="form-label">{field.label} {field.required && <span style={{ color: 'var(--danger)' }}>*</span>}</label>
-                  <input
-                    className="form-input"
-                    type={field.type}
-                    value={(formState.options as any)?.[field.key] ?? ''}
-                    onChange={e => updateOption(field.key, e.target.value)}
-                    placeholder={field.placeholder}
-                  />
+                  {field.type === 'select' ? (
+                    <select
+                      className="form-input"
+                      value={(formState.options as any)?.[field.key] ?? ''}
+                      onChange={e => updateOption(field.key, e.target.value)}
+                    >
+                      {field.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      className="form-input"
+                      type={field.type}
+                      value={(formState.options as any)?.[field.key] ?? ''}
+                      onChange={e => updateOption(field.key, e.target.value)}
+                      placeholder={field.placeholder}
+                    />
+                  )}
                 </div>
               ))}
             </div>

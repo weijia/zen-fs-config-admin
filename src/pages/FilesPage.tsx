@@ -19,31 +19,19 @@ async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
     for (const item of items) {
       const fullPath = dir === '/' ? `/${item}` : `${dir}/${item}`;
       try {
-        let stat = await fs.stat(fullPath);
+        const stat = await fs.stat(fullPath);
         // CachedFileSystem.stat uses JSON.stringify which silently drops
-        // isFile/isDirectory function properties. ChrootFS then reconstructs
-        // them but with wrong values (defaults isDir=false). When stat says
-        // "not a directory", verify with readdir as a fallback.
+        // isFile/isDirectory function properties, causing directories to
+        // appear as files on cache hit. Always verify with readdir.
         let isDir: boolean;
         if (typeof stat.isDirectory === 'function') {
           isDir = stat.isDirectory();
+          // Even if stat says file, double-check — the cached value may be wrong
           if (!isDir) {
-            // stat claims it's a file — double-check with readdir
-            // in case the cached stat lost directory info
-            try {
-              await fs.readdir(fullPath);
-              isDir = true;
-            } catch {
-              // truly not a directory
-            }
+            try { await fs.readdir(fullPath); isDir = true; } catch { /* truly a file */ }
           }
         } else {
-          try {
-            await fs.readdir(fullPath);
-            isDir = true;
-          } catch {
-            isDir = false;
-          }
+          try { await fs.readdir(fullPath); isDir = true; } catch { isDir = false; }
         }
         console.log(`${indent}[buildTree] stat(${fullPath}) => isDir=${isDir}, size=${stat.size}`);
         const node: TreeNode = { name: item, path: fullPath, isDir, children: [] };
