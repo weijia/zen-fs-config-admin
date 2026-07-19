@@ -5,7 +5,7 @@ import { useConfigRepo } from '../context/ConfigRepoContext';
 export default function ConnectPage() {
   const { connect, connecting, error } = useConfigRepo();
   const navigate = useNavigate();
-  const [appId, setAppId] = useState('my-app');
+  const [appId, setAppId] = useState('admin');
   const [backendType, setBackendType] = useState('InMemory');
   const [optionsJson, setOptionsJson] = useState(JSON.stringify({ label: 'admin' }, null, 2));
   const [cacheTtl, setCacheTtl] = useState('60000');
@@ -47,7 +47,7 @@ export default function ConnectPage() {
             className="form-input"
             value={appId}
             onChange={e => setAppId(e.target.value)}
-            placeholder="my-app"
+            placeholder="admin"
           />
         </div>
 
