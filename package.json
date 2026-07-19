@@ -15,7 +15,7 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
     "zen-fs-cache": "^1.0.1",
-    "zen-fs-config": "^0.3.1",
+    "zen-fs-config": "^0.3.2",
     "zen-fs-sync": "^0.1.0"
   },
   "devDependencies": {
