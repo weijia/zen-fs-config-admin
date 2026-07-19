@@ -21,11 +21,22 @@ async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
       try {
         let stat = await fs.stat(fullPath);
         // CachedFileSystem.stat uses JSON.stringify which silently drops
-        // isFile/isDirectory function properties. When that happens stat
-        // may lack isDirectory(), so we try readdir as a fallback.
+        // isFile/isDirectory function properties. ChrootFS then reconstructs
+        // them but with wrong values (defaults isDir=false). When stat says
+        // "not a directory", verify with readdir as a fallback.
         let isDir: boolean;
         if (typeof stat.isDirectory === 'function') {
           isDir = stat.isDirectory();
+          if (!isDir) {
+            // stat claims it's a file — double-check with readdir
+            // in case the cached stat lost directory info
+            try {
+              await fs.readdir(fullPath);
+              isDir = true;
+            } catch {
+              // truly not a directory
+            }
+          }
         } else {
           try {
             await fs.readdir(fullPath);
@@ -120,10 +131,17 @@ export default function FilesPage() {
     if (!repo || !effectivePath) return;
     console.log('[FilesPage] loading file:', effectivePath);
     const t0 = performance.now();
-    repo.rootFS.promises.stat(effectivePath).then((s: any) => {
-      // CachedFileSystem.stat may return an object without isFile()/isDirectory()
-      // after JSON round-trip. Fall back to checking for the absence of isDirectory.
-      const isFile = typeof s.isFile === 'function' ? s.isFile() : !(typeof s.isDirectory === 'function' ? s.isDirectory() : s.isDirectory);
+    repo.rootFS.promises.stat(effectivePath).then(async (s: any) => {
+      let isFile = typeof s.isFile === 'function' ? s.isFile() : !(typeof s.isDirectory === 'function' ? s.isDirectory() : s.isDirectory);
+      if (!isFile) {
+        // stat might wrongly say "not a file" due to cache — verify
+        try {
+          await repo.rootFS.promises.readdir(effectivePath);
+          isFile = false; // confirmed directory
+        } catch {
+          // readdir failed, trust stat
+        }
+      }
       console.log(`[FilesPage] stat(${effectivePath}) took ${(performance.now() - t0).toFixed(0)}ms, isFile=${isFile}`);
       if (isFile) {
         return repo.rootFS.promises.readFile(effectivePath, 'utf-8');
