@@ -7,13 +7,12 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'prompt',           // prompt 模式，不自动更新
-      injectRegister: 'auto',           // 自动注入 SW 注册代码
-      strategies: 'injectManifest',     // 使用自定义 SW
+      registerType: 'prompt',
+      injectRegister: 'auto',
+      strategies: 'injectManifest',
       srcDir: 'src',
       filename: 'sw.ts',
       injectManifest: {
-        injectionPoint: undefined,      // 禁用默认注入点，避免冲突
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
       },
       manifest: {
