@@ -29,15 +29,14 @@ jobs:
         id: version
         run: |
           TAG=${GITHUB_REF#refs/tags/}
+          BUILD_TIME=$(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M:%S")
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-          TAG_DATE=$(git log -1 --format=%ci $TAG 2>/dev/null || date -u +"%Y-%m-%d %H:%M:%S")
-          echo "build_time=$TAG_DATE" >> $GITHUB_OUTPUT
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
 
           echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
           echo "📦 Version: $TAG"
-          echo "🕐 Build Time: $TAG_DATE"
+          echo "🔨 Build Time: $BUILD_TIME"
           echo "🔨 Commit: ${GITHUB_SHA::7}"
 
       - name: Setup Node.js

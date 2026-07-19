@@ -1,5 +1,5 @@
-// 版本信息 — 构建时由 vite.config.ts 的 define 注入
-// CI 构建时通过环境变量 VITE_APP_VERSION / VITE_APP_BUILD_TIME / VITE_APP_COMMIT_SHA 覆盖
+// 版本信息 — CI 构建时通过环境变量注入
+// 本地开发时显示 dev / 当前时间 / local
 
 export const VERSION = import.meta.env.VITE_APP_VERSION || 'dev'
 export const BUILD_TIME = import.meta.env.VITE_APP_BUILD_TIME || new Date().toISOString()
