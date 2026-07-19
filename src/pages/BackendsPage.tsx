@@ -14,9 +14,8 @@ export default function BackendsPage() {
   const loadBackends = useCallback(async () => {
     if (!repo) return;
     try {
-      const raw = await repo.fs.promises.readFile('/.meta/backends.json', 'utf-8');
-      const meta: BackendsMeta = JSON.parse(raw);
-      setBackends(meta.backends);
+      const meta = await repo.getBackends();
+      setBackends(meta?.backends ?? []);
     } catch { /* file doesn't exist */ }
   }, [repo]);
 
@@ -70,7 +69,7 @@ export default function BackendsPage() {
       updated = backends.map(b => b.id === newBackend.id ? newBackend : b);
     }
     const meta: BackendsMeta = { version: 1, backends: updated };
-    await repo.fs.promises.writeFile('/.meta/backends.json', JSON.stringify(meta, null, 2));
+    await repo.updateBackends(meta);
     setEditing(null); setMessage('Saved'); setTimeout(() => setMessage(''), 2000);
     await loadBackends();
   };
@@ -78,7 +77,7 @@ export default function BackendsPage() {
   const handleRemove = async (id: string) => {
     if (!repo) return;
     const updated = backends.filter(b => b.id !== id);
-    await repo.fs.promises.writeFile('/.meta/backends.json', JSON.stringify({ version: 1, backends: updated }, null, 2));
+    await repo.updateBackends({ version: 1, backends: updated });
     await loadBackends();
   };
 

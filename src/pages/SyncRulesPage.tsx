@@ -14,14 +14,12 @@ export default function SyncRulesPage() {
   const loadData = useCallback(async () => {
     if (!repo) return;
     try {
-      const [rulesRaw, backendsRaw] = await Promise.all([
-        repo.fs.promises.readFile('/.meta/sync-rules.json', 'utf-8'),
-        repo.fs.promises.readFile('/.meta/backends.json', 'utf-8'),
+      const [rulesMeta, backendsMeta] = await Promise.all([
+        repo.getSyncRules(),
+        repo.getBackends(),
       ]);
-      const rulesMeta: SyncRulesMeta = JSON.parse(rulesRaw);
-      const backendsMeta = JSON.parse(backendsRaw);
-      setRules(rulesMeta.rules);
-      setBackendIds(backendsMeta.backends.map((b: any) => b.id));
+      setRules(rulesMeta?.rules ?? []);
+      setBackendIds(backendsMeta?.backends.map(b => b.id) ?? []);
     } catch { /* files don't exist */ }
   }, [repo]);
 
@@ -36,7 +34,7 @@ export default function SyncRulesPage() {
     let updated: SyncRule[];
     if (isNew) { updated = [...rules, newRule]; } else { updated = rules.map(r => r.prefix === newRule.prefix ? newRule : r); }
     const meta: SyncRulesMeta = { version: 1, rules: updated };
-    await repo.fs.promises.writeFile('/.meta/sync-rules.json', JSON.stringify(meta, null, 2));
+    await repo.updateSyncRules(meta);
     setEditing(null); setIsNew(false);
     await loadData();
   };
@@ -45,7 +43,7 @@ export default function SyncRulesPage() {
     if (!repo) return;
     const updated = rules.filter(r => r.prefix !== prefix);
     const meta: SyncRulesMeta = { version: 1, rules: updated };
-    await repo.fs.promises.writeFile('/.meta/sync-rules.json', JSON.stringify(meta, null, 2));
+    await repo.updateSyncRules(meta);
     await loadData();
   };
 
