@@ -39,8 +39,11 @@ export const BACKEND_TYPES: BackendTypeDef[] = [
     type: 'InMemory',
     label: 'Memory (Volatile)',
     icon: '\u{1F4BE}',
-    fields: [{ key: 'label', label: 'Label', type: 'text', placeholder: 'my-configs' }],
-    defaultOptions: { label: '' },
+    fields: [
+      { key: 'label', label: 'Label', type: 'text', placeholder: 'my-configs' },
+      { key: 'maxSize', label: 'Max Size (bytes)', type: 'text', placeholder: '104857600 (100MB)' },
+    ],
+    defaultOptions: { label: '', maxSize: '' },
   },
   {
     type: 'GitHub',
