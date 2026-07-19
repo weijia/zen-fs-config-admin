@@ -30,8 +30,8 @@ export default function BackendsPage() {
   const handleNew = () => {
     setEditing(null);
     setIsNew(true);
-    const def = getBackendTypeDef('InMemory')!;
-    setFormState({ id: '', type: 'InMemory', options: { ...def.defaultOptions }, description: '' });
+    const def = getBackendTypeDef('IndexedDB')!;
+    setFormState({ id: '', type: 'IndexedDB', options: { ...def.defaultOptions }, description: '' });
   };
 
   const changeType = (type: string) => {

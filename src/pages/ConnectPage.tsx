@@ -19,15 +19,15 @@ export default function ConnectPage() {
   const [cacheTtl, setCacheTtl] = useState('60000');
   const [localError, setLocalError] = useState('');
   const [backends, setBackends] = useState<BackendEntry[]>([
-    { id: 'admin-primary', type: 'InMemory', options: { label: 'admin' }, isPrimary: true },
+    { id: 'admin-primary', type: 'IndexedDB', options: { storeName: 'zen-fs-config' }, isPrimary: true },
   ]);
 
   const addBackend = () => {
     const id = `backend-${Date.now()}`;
     setBackends([...backends, {
       id,
-      type: 'InMemory',
-      options: { ...getBackendTypeDef('InMemory')!.defaultOptions },
+      type: 'IndexedDB',
+      options: { ...getBackendTypeDef('IndexedDB')!.defaultOptions },
       isPrimary: false,
     }]);
   };
