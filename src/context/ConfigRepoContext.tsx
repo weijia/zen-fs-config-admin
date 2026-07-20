@@ -127,6 +127,8 @@ async function walkFiles(fs: any, dir: string, prefix: string): Promise<string[]
 
 /**
  * Attach detailed sync diagnostics logging to zen-fs-sync engine.
+ * Also auto-repairs incremental detector when it misses changes
+ * (source has files but target doesn't, yet detector reports 0 changes).
  */
 function attachSyncDataLogger(repo: IConfigRepo) {
   // @ts-ignore - syncEngine is internal but accessible
@@ -134,9 +136,10 @@ function attachSyncDataLogger(repo: IConfigRepo) {
   if (!engine) return;
 
   const pairIds: string[] = engine.listPairs ? engine.listPairs() : [];
-
-  // Access internal pairs to get source/target/root/filter
   const pairsMap = (engine as any)._pairs;
+  // Track how many auto-repairs we've done per pair (prevent infinite loops)
+  const repairCount = new Map<string, number>();
+
   for (const pairId of pairIds) {
     const pair = pairsMap?.get?.(pairId);
     const prefix = pair?.options?.filter?.includePrefixes?.[0] || '/';
@@ -157,27 +160,30 @@ function attachSyncDataLogger(repo: IConfigRepo) {
         console.warn(`[sync-data] sync:end ${e.pairId} WARNING: ${r.filesSkipped} files skipped (write failed)`);
       }
 
-      // After sync, snapshot source and target to see their state
-      if (pair) {
+      // Auto-repair: if changes=0, check if source actually has files not in target.
+      // If so, the incremental detector missed them — reset snapshots and retry.
+      if (pair && r.changes.length === 0) {
+        const count = repairCount.get(pairId) || 0;
+        if (count >= 2) return; // Max 2 auto-repairs per pair lifecycle
         (async () => {
           try {
             const srcFiles = await walkFiles(pair.source, pair.root, prefix);
             const tgtFiles = await walkFiles(pair.target, pair.root, prefix);
             const inSrcNotTgt = srcFiles.filter(f => !tgtFiles.includes(f));
-            const inTgtNotSrc = tgtFiles.filter(f => !srcFiles.includes(f));
 
-            console.log(`[sync-data] snapshot ${e.pairId} prefix=${prefix}`);
-            console.log(`[sync-data]   source files: ${srcFiles.length}`, srcFiles.length <= 20 ? srcFiles : srcFiles.slice(0, 20).concat(['...(' + (srcFiles.length - 20) + ' more)']));
-            console.log(`[sync-data]   target files: ${tgtFiles.length}`, tgtFiles.length <= 20 ? tgtFiles : tgtFiles.slice(0, 20).concat(['...(' + (tgtFiles.length - 20) + ' more)']));
+            console.log(`[sync-data] snapshot ${e.pairId} src=${srcFiles.length} tgt=${tgtFiles.length}`);
 
             if (inSrcNotTgt.length > 0) {
-              console.warn(`[sync-data]   IN SOURCE BUT NOT IN TARGET (${inSrcNotTgt.length}):`, inSrcNotTgt.slice(0, 10));
-            }
-            if (inTgtNotSrc.length > 0) {
-              console.warn(`[sync-data]   IN TARGET BUT NOT IN SOURCE (${inTgtNotSrc.length}):`, inTgtNotSrc.slice(0, 10));
+              console.warn(`[sync-data] auto-repair: ${pairId} has ${inSrcNotTgt.length} files in source but not in target, resetting snapshots and re-syncing`);
+              repairCount.set(pairId, count + 1);
+              pair.sourceSnapshots = new Map();
+              await engine.sync(pairId);
+              console.log(`[sync-data] auto-repair done: ${pairId} (attempt ${count + 1})`);
+            } else if (tgtFiles.length !== srcFiles.length) {
+              console.warn(`[sync-data] snapshot diff: src=${srcFiles.length} tgt=${tgtFiles.length} (but no missing files detected)`);
             }
           } catch (err) {
-            console.error('[sync-data] snapshot error:', err);
+            console.error(`[sync-data] auto-repair error ${pairId}:`, err);
           }
         })();
       }
