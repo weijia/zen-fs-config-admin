@@ -44,11 +44,6 @@ const Context = createContext<ConfigRepoContextValue>({
   reconnect: async () => {},
 });
 
-/**
- * Repair sync rules:
- * 1. Fill empty replicas for active rules
- * 2. Upgrade /.meta/ rule from 'none' to 'one-way'
- */
 async function ensureSyncPairs(repo: IConfigRepo, appId: string, options: ConfigRepoOptions): Promise<IConfigRepo> {
   const statuses = repo.getSyncStatuses();
   if (statuses.size > 0) return repo;
@@ -97,7 +92,7 @@ async function ensureSyncPairs(repo: IConfigRepo, appId: string, options: Config
 }
 
 /**
- * Walk a directory tree and return file paths relative to root.
+ * Walk a directory tree and return file paths matching prefix.
  */
 async function walkFiles(fs: any, dir: string, prefix: string): Promise<string[]> {
   const results: string[] = [];
@@ -109,7 +104,15 @@ async function walkFiles(fs: any, dir: string, prefix: string): Promise<string[]
         if (entry.startsWith('.')) continue;
         const fullPath = d === '/' ? `/${entry}` : `${d}/${entry}`;
         const relPath = fullPath.slice(root.length) || '/';
-        if (!relPath.startsWith(prefix)) continue;
+        if (!relPath.startsWith(prefix)) {
+          try {
+            const stat = await fs.stat(fullPath);
+            if (typeof stat.isDirectory === 'function' && stat.isDirectory()) {
+              await visit(fullPath);
+            }
+          } catch { /* ignore */ }
+          continue;
+        }
         try {
           const stat = await fs.stat(fullPath);
           if (typeof stat.isDirectory === 'function' && stat.isDirectory()) {
@@ -126,84 +129,120 @@ async function walkFiles(fs: any, dir: string, prefix: string): Promise<string[]
 }
 
 /**
- * Attach detailed sync diagnostics logging to zen-fs-sync engine.
- * Also auto-repairs incremental detector when it misses changes
- * (source has files but target doesn't, yet detector reports 0 changes).
+ * Sync once and stop watching. No continuous polling.
+ */
+async function syncOnceAndStop(repo: IConfigRepo) {
+  try {
+    // @ts-ignore
+    const engine = repo.syncEngine;
+    if (!engine) return;
+
+    const pairIds: string[] = engine.listPairs ? engine.listPairs() : [];
+    if (pairIds.length === 0) return;
+
+    console.log('[sync-data] === SYNC ONCE START ===');
+    for (const pairId of pairIds) {
+      console.log(`[sync-data] syncing ${pairId}...`);
+      await engine.sync(pairId);
+    }
+    console.log('[sync-data] === SYNC ONCE DONE ===');
+
+    // Stop all watches to disable continuous polling
+    for (const pairId of pairIds) {
+      try { engine.unwatch(pairId); } catch { /* may not be watching */ }
+    }
+    console.log('[sync-data] all watches stopped — manual sync only');
+  } catch (err) {
+    console.error('[sync-data] syncOnceAndStop error:', err);
+  }
+}
+
+/**
+ * Attach verbose sync logging: file lists, readFile, writeFile, sync results.
  */
 function attachSyncDataLogger(repo: IConfigRepo) {
-  // @ts-ignore - syncEngine is internal but accessible
+  // @ts-ignore
   const engine = repo.syncEngine;
   if (!engine) return;
 
   const pairIds: string[] = engine.listPairs ? engine.listPairs() : [];
   const pairsMap = (engine as any)._pairs;
-  // Track how many auto-repairs we've done per pair (prevent infinite loops)
-  const repairCount = new Map<string, number>();
 
   for (const pairId of pairIds) {
     const pair = pairsMap?.get?.(pairId);
-    const prefix = pair?.options?.filter?.includePrefixes?.[0] || '/';
+    if (!pair) continue;
+    const prefix = pair.options?.filter?.includePrefixes?.[0] || '/';
 
+    // Log pair setup
+    console.log(`[sync-data] pair: ${pairId} prefix=${prefix} dir=${pair.options?.direction} root=${pair.root}`);
+
+    // Wrap writeFile to log every write operation
+    const origWrite = pair.target.writeFile;
+    pair.target.writeFile = async (path: string, content: string | Uint8Array) => {
+      const len = typeof content === 'string' ? content.length : content?.byteLength || 0;
+      console.log(`[sync-data] WRITE → target:${pairId} ${path} (${len} bytes)`);
+      try {
+        const result = await origWrite(path, content);
+        console.log(`[sync-data] WRITE OK → target:${pairId} ${path}`);
+        return result;
+      } catch (err: any) {
+        console.error(`[sync-data] WRITE FAIL → target:${pairId} ${path}:`, err.message || err);
+        throw err;
+      }
+    };
+
+    // Wrap readFile to log every read operation
+    const origRead = pair.source.readFile;
+    pair.source.readFile = async (path: string, encoding?: string) => {
+      console.log(`[sync-data] READ  ← source:${pairId} ${path}`);
+      try {
+        const content = await origRead(path, encoding);
+        const len = typeof content === 'string' ? content.length : content?.byteLength || 0;
+        console.log(`[sync-data] READ  OK ← source:${pairId} ${path} (${len} bytes)`);
+        return content;
+      } catch (err: any) {
+        console.error(`[sync-data] READ  FAIL ← source:${pairId} ${path}:`, err.message || err);
+        throw err;
+      }
+    };
+
+    // sync:start: print source/target file lists
     engine.on(pairId, 'sync:start', (e: any) => {
-      console.log(`[sync-data] sync:start ${e.pairId} ${new Date(e.timestamp).toLocaleTimeString()}`);
+      (async () => {
+        try {
+          const [srcFiles, tgtFiles] = await Promise.all([
+            walkFiles(pair.source, pair.root, prefix),
+            walkFiles(pair.target, pair.root, prefix),
+          ]);
+          console.log(`[sync-data] sync:start ${e.pairId} src=${srcFiles.length} tgt=${tgtFiles.length}`);
+          console.log(`[sync-data]   source files: [${srcFiles.join(', ')}]`);
+          console.log(`[sync-data]   target files: [${tgtFiles.join(', ')}]`);
+        } catch (err) {
+          console.error(`[sync-data] sync:start file list error ${e.pairId}:`, err);
+        }
+      })();
     });
 
+    // sync:end: print result summary
     engine.on(pairId, 'sync:end', (e: any) => {
       const r = e.result;
       console.log(`[sync-data] sync:end ${e.pairId} +${r.filesCreated}/~${r.filesUpdated}/-${r.filesDeleted} skip:${r.filesSkipped} changes:${r.changes?.length || 0} ${r.durationMs}ms`);
       if (r.changes?.length) {
         r.changes.forEach((c: any) => {
-          console.log(`[sync-data]   change: ${c.type} ${c.path}`);
+          console.log(`[sync-data]   CHANGE: ${c.type} ${c.path}`);
         });
       }
       if (r.filesSkipped > 0) {
-        console.warn(`[sync-data] sync:end ${e.pairId} WARNING: ${r.filesSkipped} files skipped (write failed)`);
-      }
-
-      // Auto-repair: if changes=0, check if source actually has files not in target.
-      // If so, the incremental detector missed them — reset snapshots and retry.
-      if (pair && r.changes.length === 0) {
-        const count = repairCount.get(pairId) || 0;
-        if (count >= 2) return; // Max 2 auto-repairs per pair lifecycle
-        (async () => {
-          try {
-            const srcFiles = await walkFiles(pair.source, pair.root, prefix);
-            const tgtFiles = await walkFiles(pair.target, pair.root, prefix);
-            const inSrcNotTgt = srcFiles.filter(f => !tgtFiles.includes(f));
-
-            console.log(`[sync-data] snapshot ${e.pairId} src=${srcFiles.length} tgt=${tgtFiles.length}`);
-
-            if (inSrcNotTgt.length > 0) {
-              console.warn(`[sync-data] auto-repair: ${pairId} has ${inSrcNotTgt.length} files in source but not in target, resetting snapshots and re-syncing`);
-              repairCount.set(pairId, count + 1);
-              pair.sourceSnapshots = new Map();
-              await engine.sync(pairId);
-              console.log(`[sync-data] auto-repair done: ${pairId} (attempt ${count + 1})`);
-            } else if (tgtFiles.length !== srcFiles.length) {
-              console.warn(`[sync-data] snapshot diff: src=${srcFiles.length} tgt=${tgtFiles.length} (but no missing files detected)`);
-            }
-          } catch (err) {
-            console.error(`[sync-data] auto-repair error ${pairId}:`, err);
-          }
-        })();
+        console.warn(`[sync-data] WARNING: ${r.filesSkipped} files skipped (write failed)`);
       }
     });
 
     engine.on(pairId, 'sync:error', (e: any) => {
-      console.error(`[sync-data] sync:error ${e.pairId}`, e.error);
+      console.error(`[sync-data] sync:error ${e.pairId}:`, e.error);
     });
     engine.on(pairId, 'conflict', (e: any) => {
-      console.warn(`[sync-data] conflict ${e.pairId}`, e.conflict?.path);
+      console.warn(`[sync-data] conflict ${e.pairId}:`, e.conflict?.path);
     });
-  }
-
-  // Log initial pair setup details
-  for (const pairId of pairIds) {
-    const pair = pairsMap?.get?.(pairId);
-    if (pair) {
-      const prefix = pair.options?.filter?.includePrefixes?.[0] || '/';
-      console.log(`[sync-data] pair: ${pairId} prefix=${prefix} dir=${pair.options?.direction} root=${pair.root}`);
-    }
   }
 }
 
@@ -228,6 +267,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
       setConnected(true);
       setPrimaryBackendId(options.primaryBackendId);
       attachSyncDataLogger(r);
+      await syncOnceAndStop(r);
       console.log('[version] connected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
       setError(err.message || String(err));
@@ -261,6 +301,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
       r = await ensureSyncPairs(r, params.appId, params.options);
       setRepo(r);
       attachSyncDataLogger(r);
+      await syncOnceAndStop(r);
       console.log('[version] reconnected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
       setError(err.message || String(err));
@@ -282,6 +323,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
         setConnected(true);
         setPrimaryBackendId(saved.options.primaryBackendId);
         attachSyncDataLogger(r);
+        await syncOnceAndStop(r);
         console.log('[version] auto-reconnected:', versionDisplay, '| build:', buildTimeDisplay);
       })
       .catch(err => {
