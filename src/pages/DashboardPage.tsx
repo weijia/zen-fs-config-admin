@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 
 export default function DashboardPage() {
@@ -7,6 +7,7 @@ export default function DashboardPage() {
   const [flushResult, setFlushResult] = useState<any[]>([]);
   const [flushing, setFlushing] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const prevTotalSyncsRef = useRef(0);
 
   useEffect(() => {
     if (!repo) return;
@@ -14,12 +15,25 @@ export default function DashboardPage() {
     return () => clearInterval(timer);
   }, [repo]);
 
-  // Suppress unused variable lint
-  void refreshKey;
-
   useEffect(() => {
     if (!repo) return;
     repo.listConflicts().then(setConflicts).catch(() => {});
+  }, [repo, refreshKey]);
+
+  // Log sync status changes every 3s
+  useEffect(() => {
+    if (!repo) return;
+    const statuses = repo.getSyncStatuses();
+    const pairs = Array.from(statuses.entries());
+    const totalSyncs = pairs.reduce((sum, [, s]) => sum + s.totalSyncs, 0);
+
+    if (totalSyncs !== prevTotalSyncsRef.current) {
+      console.log('[sync-data] status tick — totalSyncs:', totalSyncs, 'pairs:', pairs.length);
+      pairs.forEach(([id, s]) => {
+        console.log('[sync-data]   pair:', id, 'state:', s.state, 'watching:', s.watching, 'totalSyncs:', s.totalSyncs, 'lastResult:', s.lastResult);
+      });
+      prevTotalSyncsRef.current = totalSyncs;
+    }
   }, [repo, refreshKey]);
 
   if (!repo) return <div className="loading">No repo connected</div>;
@@ -35,9 +49,13 @@ export default function DashboardPage() {
   const handleFlush = async () => {
     setFlushing(true);
     try {
+      console.log('[sync-data] flush start');
       const results = await repo.flush();
+      console.log('[sync-data] flush done, results:', JSON.stringify(results));
       setFlushResult(results);
-    } catch {} finally {
+    } catch (err) {
+      console.error('[sync-data] flush failed:', err);
+    } finally {
       setFlushing(false);
     }
   };

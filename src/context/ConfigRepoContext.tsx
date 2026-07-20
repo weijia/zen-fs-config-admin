@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import { createConfigRepo, type IConfigRepo, type ConfigRepoOptions } from 'zen-fs-config';
+import { versionDisplay, buildTimeDisplay } from '../version';
 
 const STORAGE_KEY = 'zen-fs-config-admin:connect-params';
 
@@ -49,28 +50,17 @@ async function ensureSyncPairs(repo: IConfigRepo, appId: string, options: Config
   const statuses = repo.getSyncStatuses();
   if (statuses.size > 0) return repo;
 
-  console.log('[sync] syncPairs=0, checking stored backends for repair...');
   try {
     const backendsMeta = await repo.getBackends();
     const syncMeta = await repo.getSyncRules();
-    if (!backendsMeta || !syncMeta) {
-      console.log('[sync] no meta files, skipping repair');
-      return repo;
-    }
+    if (!backendsMeta || !syncMeta) return repo;
 
     const replicaIds = backendsMeta.backends.map(b => b.id).filter(id => id !== options.primaryBackendId);
-    if (replicaIds.length === 0) {
-      console.log('[sync] only primary backend exists, no repair needed');
-      return repo;
-    }
+    if (replicaIds.length === 0) return repo;
 
     const needsRepair = syncMeta.rules.some(r => r.direction !== 'none' && (!r.replicas || r.replicas.length === 0));
-    if (!needsRepair) {
-      console.log('[sync] syncRules already have replicas, no repair needed');
-      return repo;
-    }
+    if (!needsRepair) return repo;
 
-    console.log('[sync] repair: filling empty replicas with:', replicaIds);
     const fixedRules = syncMeta.rules.map(rule =>
       rule.direction === 'none' ? rule : { ...rule, replicas: replicaIds }
     );
@@ -78,12 +68,29 @@ async function ensureSyncPairs(repo: IConfigRepo, appId: string, options: Config
     await repo.dispose();
 
     const r2 = await createConfigRepo(appId, options);
-    console.log('[sync] repair done, syncPairs:', r2.getSyncStatuses().size);
     return r2;
   } catch (err) {
-    console.error('[sync] repair failed:', err);
     return repo;
   }
+}
+
+function attachSyncDataLogger(repo: IConfigRepo) {
+  // @ts-ignore - syncEngine is internal but accessible
+  const engine = repo.syncEngine;
+  if (!engine) return;
+
+  engine.on('sync:start', (e: any) => {
+    console.log('[sync-data] sync:start', e.pairId, e.timestamp);
+  });
+  engine.on('sync:end', (e: any) => {
+    console.log('[sync-data] sync:end', e.pairId, 'result:', e.result);
+  });
+  engine.on('sync:error', (e: any) => {
+    console.error('[sync-data] sync:error', e.pairId, e.error);
+  });
+  engine.on('conflict', (e: any) => {
+    console.warn('[sync-data] conflict', e.pairId, e.path);
+  });
 }
 
 export function ConfigRepoProvider({ children }: { children: ReactNode }) {
@@ -98,16 +105,14 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
     setConnecting(true);
     setError(null);
     try {
-      console.log('[sync] createConfigRepo start, appId:', appId, 'primaryBackendId:', options.primaryBackendId);
       let r = await createConfigRepo(appId, options);
       r = await ensureSyncPairs(r, appId, options);
       connectParamsRef.current = { appId, options };
       saveConnectParams(appId, options);
       setRepo(r);
       setConnected(true);
-      const syncStatuses = r.getSyncStatuses();
-      console.log('[sync] connect done, syncPairs:', syncStatuses.size);
-      syncStatuses.forEach((v, k) => console.log('[sync]   pair:', k, '→ status:', v));
+      attachSyncDataLogger(r);
+      console.log('[version] connected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
       setError(err.message || String(err));
       throw err;
@@ -134,16 +139,13 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
     if (!params) return;
     setReconnecting(true);
     try {
-      console.log('[sync] reconnect start');
       if (repo) await repo.dispose();
       let r = await createConfigRepo(params.appId, params.options);
       r = await ensureSyncPairs(r, params.appId, params.options);
       setRepo(r);
-      const syncStatuses = r.getSyncStatuses();
-      console.log('[sync] reconnect done, syncPairs:', syncStatuses.size);
-      syncStatuses.forEach((v, k) => console.log('[sync]   pair:', k, '→ status:', v));
+      attachSyncDataLogger(r);
+      console.log('[version] reconnected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
-      console.error('[sync] reconnect failed:', err);
       setError(err.message || String(err));
     } finally {
       setReconnecting(false);
@@ -154,7 +156,6 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const saved = loadConnectParams();
     if (!saved) return;
-    console.log('[sync] auto-reconnecting from saved params, appId:', saved.appId);
     setConnecting(true);
     createConfigRepo(saved.appId, saved.options)
       .then(async r => {
@@ -162,10 +163,11 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
         connectParamsRef.current = saved;
         setRepo(r);
         setConnected(true);
-        console.log('[sync] auto-reconnect done, syncPairs:', r.getSyncStatuses().size);
+        attachSyncDataLogger(r);
+        console.log('[version] auto-reconnected:', versionDisplay, '| build:', buildTimeDisplay);
       })
       .catch(err => {
-        console.error('[sync] auto-reconnect failed:', err);
+        console.error('[version] auto-reconnect failed:', err);
         clearConnectParams();
       })
       .finally(() => setConnecting(false));
