@@ -131,6 +131,7 @@ async function walkFiles(fs: any, dir: string, prefix: string): Promise<string[]
 /**
  * Sync once and stop watching. No continuous polling.
  * Reset sourceSnapshots to force "first sync" path (source vs target comparison).
+ * Prints source/target file lists before syncing (bypasses event system).
  */
 async function syncOnceAndStop(repo: IConfigRepo) {
   try {
@@ -143,26 +144,45 @@ async function syncOnceAndStop(repo: IConfigRepo) {
 
     console.log('[sync-data] === SYNC ONCE START ===');
     for (const [pairId, pair] of pairsMap.entries()) {
-      console.log(`[sync-data] syncing ${pairId}...`);
-      console.log(`[sync-data]   before: sourceSnapshots.size=${pair.sourceSnapshots?.size || 0}`);
+      const prefix = pair.options?.filter?.includePrefixes?.[0] || '/';
+      const root = pair.root || '/';
+
+      console.log(`[sync-data] syncing ${pairId} ...`);
+      console.log(`[sync-data]   pair: prefix=${prefix} dir=${pair.options?.direction} root=${root}`);
+
+      // Walk source and target files directly (before sync, before reset)
+      console.log(`[sync-data]   walking source files (root=${root}, prefix=${prefix})...`);
+      let srcFiles: string[] = [];
+      let tgtFiles: string[] = [];
+      try {
+        [srcFiles, tgtFiles] = await Promise.all([
+          walkFiles(pair.source, root, prefix),
+          walkFiles(pair.target, root, prefix),
+        ]);
+      } catch (err: any) {
+        console.error(`[sync-data]   walk error:`, err.message || err);
+      }
+      console.log(`[sync-data]   source files (${srcFiles.length}): [${srcFiles.join(', ')}]`);
+      console.log(`[sync-data]   target files (${tgtFiles.length}): [${tgtFiles.join(', ')}]`);
 
       // Reset snapshots to force detector to compare source vs target (first-sync path)
+      console.log(`[sync-data]   resetting sourceSnapshots (was ${pair.sourceSnapshots?.size || 0} entries)`);
       pair.sourceSnapshots = new Map();
       if (pair.options?.direction === 'bi-directional') {
         pair.targetSnapshots = new Map();
       }
 
-      // Call pair.sync() directly and await (engine.sync() does NOT await pair.sync())
+      // Call pair.sync() directly and await
       const result = await pair.sync();
-      console.log(`[sync-data]   after: sourceSnapshots.size=${pair.sourceSnapshots?.size || 0}`);
-      console.log(`[sync-data]   result:`, JSON.stringify({
-        filesCreated: result?.filesCreated,
-        filesUpdated: result?.filesUpdated,
-        filesDeleted: result?.filesDeleted,
-        filesSkipped: result?.filesSkipped,
-        changes: result?.changes?.length,
-        durationMs: result?.durationMs,
-      }));
+      console.log(`[sync-data]   sync result: +${result?.filesCreated}/~${result?.filesUpdated}/-${result?.filesDeleted} skip:${result?.filesSkipped} changes:${result?.changes?.length || 0} ${result?.durationMs || '?'}ms`);
+      if (result?.changes?.length) {
+        result.changes.forEach((c: any) => {
+          console.log(`[sync-data]     CHANGE: ${c.type} ${c.path}`);
+        });
+      }
+      if (result?.filesSkipped > 0) {
+        console.warn(`[sync-data]     WARNING: ${result.filesSkipped} files skipped`);
+      }
     }
     console.log('[sync-data] === SYNC ONCE DONE ===');
 
@@ -177,8 +197,7 @@ async function syncOnceAndStop(repo: IConfigRepo) {
 }
 
 /**
- * Attach verbose sync logging: file lists, readFile, writeFile, sync results.
- * Also wraps pair.sync() to log detector internals.
+ * Attach verbose sync logging: readFile, writeFile, sync results.
  */
 function attachSyncDataLogger(repo: IConfigRepo) {
   // @ts-ignore
@@ -191,31 +210,8 @@ function attachSyncDataLogger(repo: IConfigRepo) {
   for (const pairId of pairIds) {
     const pair = pairsMap?.get?.(pairId);
     if (!pair) continue;
-    const prefix = pair.options?.filter?.includePrefixes?.[0] || '/';
 
-    // Log pair setup
-    console.log(`[sync-data] pair: ${pairId} prefix=${prefix} dir=${pair.options?.direction} root=${pair.root}`);
-
-    // Wrap pair.sync() to log detector state
-    const origSync = pair.sync;
-    pair.sync = async () => {
-      console.log(`[sync-data] pair.sync() START ${pairId}`);
-      console.log(`[sync-data]   sourceSnapshots.size=${pair.sourceSnapshots?.size || 0} targetSnapshots.size=${pair.targetSnapshots?.size || 0}`);
-      try {
-        const result = await origSync();
-        console.log(`[sync-data] pair.sync() DONE ${pairId}`, JSON.stringify({
-          filesCreated: result?.filesCreated,
-          filesUpdated: result?.filesUpdated,
-          filesDeleted: result?.filesDeleted,
-          changes: result?.changes?.length,
-          durationMs: result?.durationMs,
-        }));
-        return result;
-      } catch (err: any) {
-        console.error(`[sync-data] pair.sync() ERROR ${pairId}:`, err.message || err);
-        throw err;
-      }
-    };
+    console.log(`[sync-data] pair: ${pairId} prefix=${pair.options?.filter?.includePrefixes?.[0] || '/'} dir=${pair.options?.direction} root=${pair.root}`);
 
     // Wrap writeFile to log every write operation
     const origWrite = pair.target.writeFile;
@@ -247,35 +243,10 @@ function attachSyncDataLogger(repo: IConfigRepo) {
       }
     };
 
-    // sync:start: print source/target file lists
-    engine.on(pairId, 'sync:start', (e: any) => {
-      (async () => {
-        try {
-          const [srcFiles, tgtFiles] = await Promise.all([
-            walkFiles(pair.source, pair.root, prefix),
-            walkFiles(pair.target, pair.root, prefix),
-          ]);
-          console.log(`[sync-data] sync:start ${e.pairId} src=${srcFiles.length} tgt=${tgtFiles.length}`);
-          console.log(`[sync-data]   source files: [${srcFiles.join(', ')}]`);
-          console.log(`[sync-data]   target files: [${tgtFiles.join(', ')}]`);
-        } catch (err) {
-          console.error(`[sync-data] sync:start file list error ${e.pairId}:`, err);
-        }
-      })();
-    });
-
     // sync:end: print result summary
     engine.on(pairId, 'sync:end', (e: any) => {
       const r = e.result;
       console.log(`[sync-data] sync:end ${e.pairId} +${r.filesCreated}/~${r.filesUpdated}/-${r.filesDeleted} skip:${r.filesSkipped} changes:${r.changes?.length || 0} ${r.durationMs}ms`);
-      if (r.changes?.length) {
-        r.changes.forEach((c: any) => {
-          console.log(`[sync-data]   CHANGE: ${c.type} ${c.path}`);
-        });
-      }
-      if (r.filesSkipped > 0) {
-        console.warn(`[sync-data] WARNING: ${r.filesSkipped} files skipped (write failed)`);
-      }
     });
 
     engine.on(pairId, 'sync:error', (e: any) => {
