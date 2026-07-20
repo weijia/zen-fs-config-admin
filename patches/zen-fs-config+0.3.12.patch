@@ -1,0 +1,13 @@
+diff --git a/node_modules/zen-fs-config/dist/index.mjs b/node_modules/zen-fs-config/dist/index.mjs
+index 001df65..377ccff 100644
+--- a/node_modules/zen-fs-config/dist/index.mjs
++++ b/node_modules/zen-fs-config/dist/index.mjs
+@@ -1068,7 +1068,7 @@ var ConfigRepo = class {
+               includePrefixes: [rule.prefix]
+             }
+           },
+-          "/"
++          this.nodePath
+         );
+         console.log(`[ConfigRepo] Sync pair added: pairId=${pair.pairId}, prefix=${rule.prefix}, dir=${rule.direction}, replica=${replicaId}`);
+         const conflictHandler = (event) => {
