@@ -45,8 +45,10 @@ const Context = createContext<ConfigRepoContextValue>({
 });
 
 /**
- * If syncPairs=0 but non-primary backends exist in stored meta,
- * fill empty replicas and do one more createConfigRepo cycle.
+ * Repair sync rules:
+ * 1. Fill empty replicas for active rules
+ * 2. Upgrade /.meta/ rule from 'none' to 'one-way' so backends/sync-rules
+ *    are synced to remote backends (other clients can read them)
  */
 async function ensureSyncPairs(repo: IConfigRepo, appId: string, options: ConfigRepoOptions): Promise<IConfigRepo> {
   const statuses = repo.getSyncStatuses();
@@ -62,12 +64,30 @@ async function ensureSyncPairs(repo: IConfigRepo, appId: string, options: Config
       .map(b => b.id);
     if (enabledReplicaIds.length === 0) return repo;
 
-    const needsRepair = syncMeta.rules.some(r => r.direction !== 'none' && (!r.replicas || r.replicas.length === 0));
+    let needsRepair = syncMeta.rules.some(
+      r => r.direction !== 'none' && (!r.replicas || r.replicas.length === 0)
+    );
+
+    // Check if /.meta/ rule is still 'none' — upgrade to one-way
+    const metaRule = syncMeta.rules.find(r => r.prefix === '/.meta/');
+    if (metaRule && metaRule.direction === 'none') {
+      needsRepair = true;
+    }
+
     if (!needsRepair) return repo;
 
-    const fixedRules = syncMeta.rules.map(rule =>
-      rule.direction === 'none' ? rule : { ...rule, replicas: enabledReplicaIds }
-    );
+    const fixedRules = syncMeta.rules.map(rule => {
+      if (rule.prefix === '/.meta/' && rule.direction === 'none') {
+        return {
+          ...rule,
+          direction: 'one-way' as any,
+          conflictStrategy: 'source-wins' as any,
+          replicas: enabledReplicaIds,
+        };
+      }
+      if (rule.direction === 'none') return rule;
+      return { ...rule, replicas: rule.replicas?.length ? rule.replicas : enabledReplicaIds };
+    });
     await repo.updateSyncRules({ version: 1, rules: fixedRules });
     await repo.dispose();
 

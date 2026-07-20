@@ -92,7 +92,12 @@ export default function ConnectPage() {
           replicas: backends.filter(b => !b.isPrimary).map(b => b.id),
         },
         { prefix: '/nodes/', direction: 'none' as any },
-        { prefix: '/.meta/', direction: 'none' as any },
+        {
+          prefix: '/.meta/',
+          direction: 'one-way' as any,
+          conflictStrategy: 'source-wins' as any,
+          replicas: backends.filter(b => !b.isPrimary).map(b => b.id),
+        },
       ];
 
 
