@@ -48,19 +48,27 @@ const Context = createContext<ConfigRepoContextValue>({
 async function ensureSyncPairs(repo: IConfigRepo, appId: string, options: ConfigRepoOptions): Promise<IConfigRepo> {
   const statuses = repo.getSyncStatuses();
   if (statuses.size > 0) return repo;
-  if (!options.bootstrap?.backends || options.bootstrap.backends.length <= 1) return repo;
 
-  console.log('[sync] syncPairs=0 but multiple backends exist, attempting repair...');
+  console.log('[sync] syncPairs=0, checking stored backends for repair...');
   try {
     const backendsMeta = await repo.getBackends();
     const syncMeta = await repo.getSyncRules();
-    if (!backendsMeta || !syncMeta) return repo;
+    if (!backendsMeta || !syncMeta) {
+      console.log('[sync] no meta files, skipping repair');
+      return repo;
+    }
 
     const replicaIds = backendsMeta.backends.map(b => b.id).filter(id => id !== options.primaryBackendId);
-    if (replicaIds.length === 0) return repo;
+    if (replicaIds.length === 0) {
+      console.log('[sync] only primary backend exists, no repair needed');
+      return repo;
+    }
 
     const needsRepair = syncMeta.rules.some(r => r.direction !== 'none' && (!r.replicas || r.replicas.length === 0));
-    if (!needsRepair) return repo;
+    if (!needsRepair) {
+      console.log('[sync] syncRules already have replicas, no repair needed');
+      return repo;
+    }
 
     console.log('[sync] repair: filling empty replicas with:', replicaIds);
     const fixedRules = syncMeta.rules.map(rule =>
