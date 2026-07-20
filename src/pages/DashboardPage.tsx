@@ -8,6 +8,8 @@ export default function DashboardPage() {
   const [flushing, setFlushing] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [syncingPair, setSyncingPair] = useState<string | null>(null);
+  const [diagResult, setDiagResult] = useState<any>(null);
+  const [diagRunning, setDiagRunning] = useState(false);
   const prevTotalSyncsRef = useRef(0);
 
   useEffect(() => {
@@ -83,13 +85,114 @@ export default function DashboardPage() {
     }
   };
 
+  /**
+   * Full diagnostic: for each sync pair, directly walk source and target
+   * file trees (bypassing incremental detector) and report differences.
+   */
+  const handleDiagnose = async () => {
+    setDiagRunning(true);
+    setDiagResult(null);
+    try {
+      // @ts-ignore
+      const engine = repo?.syncEngine;
+      if (!engine) {
+        setDiagResult({ error: 'No sync engine available' });
+        return;
+      }
+      const pairsMap = (engine as any)._pairs;
+      if (!pairsMap) {
+        setDiagResult({ error: 'Cannot access internal pairs map' });
+        return;
+      }
+
+      const results: any[] = [];
+      for (const [pairId, pair] of pairsMap.entries()) {
+        const prefix = pair.options?.filter?.includePrefixes?.[0] || '/';
+        const direction = pair.options?.direction;
+        const root = pair.root || '/';
+
+        console.log(`[diag] pair=${pairId} prefix=${prefix} dir=${direction} root=${root}`);
+
+        // Walk source
+        const srcFiles: string[] = [];
+        await walkAndCollect(pair.source, root, prefix, srcFiles);
+        console.log(`[diag] ${pairId} source files (${srcFiles.length}):`, srcFiles);
+
+        // Walk target
+        const tgtFiles: string[] = [];
+        await walkAndCollect(pair.target, root, prefix, tgtFiles);
+        console.log(`[diag] ${pairId} target files (${tgtFiles.length}):`, tgtFiles);
+
+        const inSrcNotTgt = srcFiles.filter(f => !tgtFiles.includes(f));
+        const inTgtNotSrc = tgtFiles.filter(f => !srcFiles.includes(f));
+
+        console.log(`[diag] ${pairId} inSourceNotTarget (${inSrcNotTgt.length}):`, inSrcNotTgt);
+        console.log(`[diag] ${pairId} inTargetNotSource (${inTgtNotSrc.length}):`, inTgtNotSrc);
+
+        results.push({
+          pairId,
+          prefix,
+          direction: String(direction),
+          sourceCount: srcFiles.length,
+          targetCount: tgtFiles.length,
+          sourceFiles: srcFiles,
+          targetFiles: tgtFiles,
+          inSourceNotTarget: inSrcNotTgt,
+          inTargetNotSource: inTgtNotSrc,
+        });
+      }
+
+      setDiagResult({ pairs: results });
+    } catch (err) {
+      console.error('[diag] failed:', err);
+      setDiagResult({ error: String(err) });
+    } finally {
+      setDiagRunning(false);
+    }
+  };
+
+  /**
+   * Force full sync: reset sourceSnapshots to empty so next detect()
+   * compares source vs target (not source vs source-prev).
+   */
+  const handleForceFullSync = async () => {
+    setDiagRunning(true);
+    try {
+      // @ts-ignore
+      const engine = repo?.syncEngine;
+      if (!engine) return;
+      const pairsMap = (engine as any)._pairs;
+      if (!pairsMap) return;
+
+      for (const [pairId, pair] of pairsMap.entries()) {
+        console.log(`[diag] force full sync: ${pairId} - resetting sourceSnapshots`);
+        pair.sourceSnapshots = new Map();
+        const result = await engine.sync(pairId);
+        console.log(`[diag] force full sync done: ${pairId}`, result);
+      }
+      setRefreshKey(k => k + 1);
+    } catch (err) {
+      console.error('[diag] force full sync failed:', err);
+    } finally {
+      setDiagRunning(false);
+    }
+  };
+
   return (
     <div>
       <div className="page-header">
         <h1 className="page-title">Dashboard</h1>
-        <button className="btn btn-primary" onClick={handleFlush} disabled={flushing}>
-          {flushing ? 'Syncing...' : 'Flush All'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary" onClick={handleDiagnose} disabled={diagRunning}>
+            {diagRunning ? 'Running...' : 'Diagnose'}
+          </button>
+          <button className="btn btn-secondary" onClick={handleForceFullSync} disabled={diagRunning}>
+            Force Full Sync
+          </button>
+          <button className="btn btn-primary" onClick={handleFlush} disabled={flushing}>
+            {flushing ? 'Syncing...' : 'Flush All'}
+          </button>
+        </div>
       </div>
 
       <div className="stats-grid" style={{ marginBottom: 24 }}>
@@ -116,6 +219,50 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Diagnostic Results */}
+      {diagResult && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div className="card-title">Diagnostic Results</div>
+          {diagResult.error && (
+            <div style={{ color: 'var(--danger)' }}>{diagResult.error}</div>
+          )}
+          {diagResult.pairs?.map((p: any, i: number) => (
+            <div key={i} style={{ marginBottom: 16, padding: 12, background: 'var(--bg-secondary)', borderRadius: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <div>
+                  <span className="badge badge-primary">{p.pairId}</span>
+                  <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-muted)' }}>
+                    prefix={p.prefix} dir={p.direction}
+                  </span>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, fontSize: 12 }}>
+                <div>
+                  <div style={{ color: 'var(--text-muted)' }}>Source Files ({p.sourceCount})</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', maxHeight: 150, overflow: 'auto' }}>
+                    {p.sourceFiles.length === 0 ? '(empty)' : p.sourceFiles.map((f: string, j: number) => <div key={j}>{f}</div>)}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: 'var(--text-muted)' }}>Target Files ({p.targetCount})</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', maxHeight: 150, overflow: 'auto' }}>
+                    {p.targetFiles.length === 0 ? '(empty)' : p.targetFiles.map((f: string, j: number) => <div key={j}>{f}</div>)}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: p.inSourceNotTarget.length ? 'var(--danger)' : 'var(--text-muted)' }}>
+                    In Source, NOT in Target ({p.inSourceNotTarget.length})
+                  </div>
+                  <div style={{ fontFamily: 'var(--font-mono)', maxHeight: 150, overflow: 'auto' }}>
+                    {p.inSourceNotTarget.length === 0 ? '(none)' : p.inSourceNotTarget.map((f: string, j: number) => <div key={j} style={{ color: 'var(--danger)' }}>{f}</div>)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Sync Pairs Detail */}
       <div className="card" style={{ marginBottom: 24 }}>
@@ -168,19 +315,6 @@ export default function DashboardPage() {
                   <div>{r?.changes?.length ?? '-'}</div>
                 </div>
               </div>
-              {r && r.changes && r.changes.length > 0 && (
-                <div style={{ marginTop: 8, fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
-                  {r.changes.slice(0, 5).map((c: any, i: number) => (
-                    <div key={i}>{c.type}: {c.path}</div>
-                  ))}
-                  {r.changes.length > 5 && <div>... and {r.changes.length - 5} more</div>}
-                </div>
-              )}
-              {r?.durationMs && (
-                <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
-                  Last sync: {r.durationMs}ms
-                </div>
-              )}
             </div>
           );
         })}
@@ -200,4 +334,43 @@ export default function DashboardPage() {
       )}
     </div>
   );
+}
+
+/**
+ * Walk a directory tree recursively and collect file paths relative to root.
+ */
+async function walkAndCollect(fs: any, root: string, prefix: string, results: string[]): Promise<void> {
+  const rootNormalized = root.replace(/\/$/, '') || '/';
+  async function visit(dir: string) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.startsWith('.')) continue;
+      const fullPath = dir === '/' ? `/${entry}` : `${dir}/${entry}`;
+      const relPath = fullPath.slice(rootNormalized.length) || '/';
+      if (!relPath.startsWith(prefix)) {
+        // Check if it's a directory that might contain matching files
+        try {
+          const stat = await fs.stat(fullPath);
+          if (typeof stat.isDirectory === 'function' && stat.isDirectory()) {
+            await visit(fullPath);
+          }
+        } catch { /* ignore */ }
+        continue;
+      }
+      try {
+        const stat = await fs.stat(fullPath);
+        if (typeof stat.isDirectory === 'function' && stat.isDirectory()) {
+          await visit(fullPath);
+        } else if (typeof stat.isFile === 'function' ? stat.isFile() : !stat.isDirectory) {
+          results.push(relPath);
+        }
+      } catch { /* stat failed */ }
+    }
+  }
+  await visit(rootNormalized);
 }
