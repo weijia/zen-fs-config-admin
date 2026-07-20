@@ -1,5 +1,5 @@
 diff --git a/node_modules/zen-fs-config/dist/index.mjs b/node_modules/zen-fs-config/dist/index.mjs
-index e795bca..997587c 100644
+index e795bca..6ab26e8 100644
 --- a/node_modules/zen-fs-config/dist/index.mjs
 +++ b/node_modules/zen-fs-config/dist/index.mjs
 @@ -1034,6 +1034,52 @@ var ConfigRepo = class {
@@ -55,7 +55,7 @@ index e795bca..997587c 100644
      for (const desc of backends) {
        if (desc.id === primaryBackendId) continue;
        if (desc.enabled === false) {
-@@ -1046,12 +1092,21 @@ var ConfigRepo = class {
+@@ -1046,23 +1092,47 @@ var ConfigRepo = class {
          const syncable = backendToSyncableFS(instance);
          this.replicaBackends.set(desc.id, { instance, syncable });
          console.log(`[ConfigRepo] Replica ${desc.id} created successfully`);
@@ -72,15 +72,23 @@ index e795bca..997587c 100644
      }
      console.log(`[ConfigRepo] Available replicas:`, Array.from(this.replicaBackends.keys()));
      for (const [replicaId, replica] of this.replicaBackends.entries()) {
-+      // [DEBUG] 关键：记录 sync pair 的 root，验证是否被限制在 nodePath
-+      console.log(`[ConfigRepo:DEBUG] Creating sync pair: root=${this.nodePath} (THIS LIMITS SYNC SCOPE!)`);
++      // FIX: 全目录同步，root 设为 '/' 而不是 nodePath，同步范围不再被限制在 /nodes/{nodeId}
++      const syncRoot = "/";
++      console.log(`[ConfigRepo:DEBUG] Creating sync pair: root=${syncRoot} (FIXED: full-directory sync)`);
        const pair = this.syncEngine.addPair(
          this.fullFS,
          replica.syncable,
-@@ -1063,6 +1118,20 @@ var ConfigRepo = class {
-         this.nodePath
+         {
+           direction: SyncDirection.OneWay,
+           conflictStrategy: "source-wins"
+-          // No filter = sync everything under nodePath
++          // No filter = sync everything under root
+         },
+-        this.nodePath
++        syncRoot
        );
-       console.log(`[ConfigRepo] Sync pair added: pairId=${pair.pairId}, replica=${replicaId}, root=${this.nodePath}`);
+-      console.log(`[ConfigRepo] Sync pair added: pairId=${pair.pairId}, replica=${replicaId}, root=${this.nodePath}`);
++      console.log(`[ConfigRepo] Sync pair added: pairId=${pair.pairId}, replica=${replicaId}, root=${syncRoot}`);
 +      console.log(`[ConfigRepo:DEBUG] pair.root=${pair.root}, pair.source=${typeof pair.source}, pair.target=${typeof pair.target}`);
 +      // [DEBUG] 验证 pair.source 和 pair.target 的 readdir 能力
 +      try {

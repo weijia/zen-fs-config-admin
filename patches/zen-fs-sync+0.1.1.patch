@@ -1,18 +1,120 @@
+diff --git a/node_modules/zen-fs-sync/dist/index.js b/node_modules/zen-fs-sync/dist/index.js
+index b413a9b..562243a 100644
+--- a/node_modules/zen-fs-sync/dist/index.js
++++ b/node_modules/zen-fs-sync/dist/index.js
+@@ -141,11 +141,11 @@ async function walkFiles(fs, root, filter) {
+   const results = [];
+   const normalizedRoot = normalizePath(root);
+   async function visit(dir) {
+-    console.log(`[zen-fs-sync] walkFiles readdir: ${dir}`);
++    log(`readdir: ${dir}`);
+     let entries;
+     try {
+       entries = await fs.readdir(dir);
+-      console.log(`[zen-fs-sync] walkFiles readdir: ${dir} \u2192 ${entries.length} entries: [${entries.join(", ")}]`);
++      log(`readdir: ${dir} \u2192 ${entries.length} entries: [${entries.join(", ")}]`);
+     } catch (err) {
+       console.warn(`[zen-fs-sync] walkFiles readdir FAILED on ${dir}:`, err.message || err);
+       return;
+@@ -155,7 +155,7 @@ async function walkFiles(fs, root, filter) {
+       const fullPath = resolvePath(dir, entry);
+       let relPath = fullPath.slice(normalizedRoot.length) || "/";
+       if (!relPath.startsWith("/")) relPath = "/" + relPath;
+-      console.log(`[zen-fs-sync] walkFiles stat: ${fullPath}`);
++      log(`stat: ${fullPath}`);
+       let stat;
+       try {
+         stat = await fs.stat(fullPath);
+@@ -164,54 +164,30 @@ async function walkFiles(fs, root, filter) {
+         continue;
+       }
+       if (stat.isDirectory()) {
+-        console.log(`[zen-fs-sync] walkFiles   \u2192 directory ${fullPath}`);
++        log(`  \u2192 directory`);
+         await visit(fullPath);
+       } else if (stat.isFile()) {
+-        console.log(`[zen-fs-sync] walkFiles   \u2192 file ${fullPath}`);
++        log(`  \u2192 file`);
+         if (!isPathAllowed(relPath, filter)) {
+-          console.log(`[zen-fs-sync] walkFiles   \u2192 excluded by filter: ${relPath}`);
++          log(`  \u2192 excluded by filter: ${relPath}`);
+           continue;
+         }
+         results.push(relPath);
+       } else {
+-        console.log(`[zen-fs-sync] walkFiles   \u2192 unknown type ${fullPath}`);
++        log(`  \u2192 unknown type`);
+       }
+     }
+   }
+   await visit(normalizedRoot);
+-  console.log(`[zen-fs-sync] walkFiles(${root}) total: ${results.length} files: [${results.join(", ")}]`);
++  log(`walkFiles(${root}) total: ${results.length} files`);
+   return results;
+ }
+ async function buildSnapshot(fs, root, filter) {
+-  const normalizedRoot = normalizePath(root);
+-  console.log(`[zen-fs-sync] buildSnapshot: root=${root}, normalizedRoot=${normalizedRoot}`);
+-  try {
+-    const rootEntries = await fs.readdir(normalizedRoot);
+-    console.log(`[zen-fs-sync] buildSnapshot: readdir(${normalizedRoot}) \u2192 ${rootEntries.length} entries: [${rootEntries.join(", ")}]`);
+-    for (const entry of rootEntries) {
+-      const fullPath = resolvePath(normalizedRoot, entry);
+-      try {
+-        const stat = await fs.stat(fullPath);
+-        const type = stat.isDirectory() ? "DIR" : stat.isFile() ? "FILE" : "OTHER";
+-        console.log(`[zen-fs-sync] buildSnapshot:   ${type} ${entry} (fullPath=${fullPath})`);
+-        if (stat.isDirectory()) {
+-          try {
+-            const subEntries = await fs.readdir(fullPath);
+-            console.log(`[zen-fs-sync] buildSnapshot:     readdir(${fullPath}) \u2192 [${subEntries.join(", ")}]`);
+-          } catch (err) {
+-            console.warn(`[zen-fs-sync] buildSnapshot:     readdir(${fullPath}) FAILED:`, err.message || err);
+-          }
+-        }
+-      } catch (err) {
+-        console.warn(`[zen-fs-sync] buildSnapshot:   stat(${fullPath}) FAILED:`, err.message || err);
+-      }
+-    }
+-  } catch (err) {
+-    console.warn(`[zen-fs-sync] buildSnapshot: readdir(${normalizedRoot}) FAILED:`, err.message || err);
+-  }
++  console.log(`[zen-fs-sync] buildSnapshot: root=${root}`);
+   const files = await walkFiles(fs, root, filter);
+-  console.log(`[zen-fs-sync] buildSnapshot: walkFiles returned ${files.length} files: [${files.join(", ")}]`);
++  console.log(`[zen-fs-sync] buildSnapshot: walkFiles returned ${files.length} files`);
+   const snapshot = /* @__PURE__ */ new Map();
++  const normalizedRoot = normalizePath(root);
+   for (const relPath of files) {
+     const fullPath = resolvePath(normalizedRoot, relPath);
+     try {
+@@ -221,7 +197,8 @@ async function buildSnapshot(fs, root, filter) {
+         size: stat.size,
+         mtimeMs: stat.mtimeMs
+       });
+-    } catch {
++    } catch (err) {
++      log(`buildSnapshot: stat failed for ${fullPath}:`, err.message || err);
+     }
+   }
+   log(`buildSnapshot: done, ${snapshot.size} entries`);
 diff --git a/node_modules/zen-fs-sync/dist/index.mjs b/node_modules/zen-fs-sync/dist/index.mjs
-index cf8e550..6da6f98 100644
+index 106b596..6da6f98 100644
 --- a/node_modules/zen-fs-sync/dist/index.mjs
 +++ b/node_modules/zen-fs-sync/dist/index.mjs
-@@ -103,18 +103,25 @@ function simpleGlobMatch(str, pattern) {
+@@ -103,22 +103,29 @@ function simpleGlobMatch(str, pattern) {
  async function walkFiles(fs, root, filter) {
    const results = [];
    const normalizedRoot = normalizePath(root);
 +  console.log(`[zen-fs-sync:DEBUG] walkFiles START: root=${root}, normalizedRoot=${normalizedRoot}, filter=${filter ? JSON.stringify(filter) : "none"}`);
    async function visit(dir) {
-     log(`readdir: ${dir}`);
+-    console.log(`[zen-fs-sync] walkFiles readdir: ${dir}`);
++    log(`readdir: ${dir}`);
      let entries;
      try {
        entries = await fs.readdir(dir);
-       log(`readdir: ${dir} \u2192 ${entries.length} entries: [${entries.join(", ")}]`);
+-      console.log(`[zen-fs-sync] walkFiles readdir: ${dir} \u2192 ${entries.length} entries: [${entries.join(", ")}]`);
++      log(`readdir: ${dir} \u2192 ${entries.length} entries: [${entries.join(", ")}]`);
 +      console.log(`[zen-fs-sync:DEBUG] walkFiles readdir('${dir}') OK: [${entries.join(", ")}]`);
      } catch (err) {
        console.warn(`[zen-fs-sync] walkFiles readdir FAILED on ${dir}:`, err.message || err);
@@ -28,26 +130,88 @@ index cf8e550..6da6f98 100644
        const fullPath = resolvePath(dir, entry);
        let relPath = fullPath.slice(normalizedRoot.length) || "/";
        if (!relPath.startsWith("/")) relPath = "/" + relPath;
-@@ -128,6 +135,7 @@ async function walkFiles(fs, root, filter) {
+-      console.log(`[zen-fs-sync] walkFiles stat: ${fullPath}`);
++      log(`stat: ${fullPath}`);
+       let stat;
+       try {
+         stat = await fs.stat(fullPath);
+@@ -127,54 +134,33 @@ async function walkFiles(fs, root, filter) {
+         continue;
        }
        if (stat.isDirectory()) {
-         log(`  \u2192 directory`);
+-        console.log(`[zen-fs-sync] walkFiles   \u2192 directory ${fullPath}`);
++        log(`  \u2192 directory`);
 +        console.log(`[zen-fs-sync:DEBUG] walkFiles descending into dir: ${fullPath} (relPath=${relPath})`);
          await visit(fullPath);
        } else if (stat.isFile()) {
-         log(`  \u2192 file`);
-@@ -147,8 +155,10 @@ async function walkFiles(fs, root, filter) {
+-        console.log(`[zen-fs-sync] walkFiles   \u2192 file ${fullPath}`);
++        log(`  \u2192 file`);
+         if (!isPathAllowed(relPath, filter)) {
+-          console.log(`[zen-fs-sync] walkFiles   \u2192 excluded by filter: ${relPath}`);
++          log(`  \u2192 excluded by filter: ${relPath}`);
+           continue;
+         }
+         results.push(relPath);
+       } else {
+-        console.log(`[zen-fs-sync] walkFiles   \u2192 unknown type ${fullPath}`);
++        log(`  \u2192 unknown type`);
+       }
+     }
+   }
+   await visit(normalizedRoot);
+-  console.log(`[zen-fs-sync] walkFiles(${root}) total: ${results.length} files: [${results.join(", ")}]`);
++  log(`walkFiles(${root}) total: ${results.length} files`);
+   return results;
  }
  async function buildSnapshot(fs, root, filter) {
-   console.log(`[zen-fs-sync] buildSnapshot: root=${root}`);
+-  const normalizedRoot = normalizePath(root);
+-  console.log(`[zen-fs-sync] buildSnapshot: root=${root}, normalizedRoot=${normalizedRoot}`);
+-  try {
+-    const rootEntries = await fs.readdir(normalizedRoot);
+-    console.log(`[zen-fs-sync] buildSnapshot: readdir(${normalizedRoot}) \u2192 ${rootEntries.length} entries: [${rootEntries.join(", ")}]`);
+-    for (const entry of rootEntries) {
+-      const fullPath = resolvePath(normalizedRoot, entry);
+-      try {
+-        const stat = await fs.stat(fullPath);
+-        const type = stat.isDirectory() ? "DIR" : stat.isFile() ? "FILE" : "OTHER";
+-        console.log(`[zen-fs-sync] buildSnapshot:   ${type} ${entry} (fullPath=${fullPath})`);
+-        if (stat.isDirectory()) {
+-          try {
+-            const subEntries = await fs.readdir(fullPath);
+-            console.log(`[zen-fs-sync] buildSnapshot:     readdir(${fullPath}) \u2192 [${subEntries.join(", ")}]`);
+-          } catch (err) {
+-            console.warn(`[zen-fs-sync] buildSnapshot:     readdir(${fullPath}) FAILED:`, err.message || err);
+-          }
+-        }
+-      } catch (err) {
+-        console.warn(`[zen-fs-sync] buildSnapshot:   stat(${fullPath}) FAILED:`, err.message || err);
+-      }
+-    }
+-  } catch (err) {
+-    console.warn(`[zen-fs-sync] buildSnapshot: readdir(${normalizedRoot}) FAILED:`, err.message || err);
+-  }
++  console.log(`[zen-fs-sync] buildSnapshot: root=${root}`);
 +  console.log(`[zen-fs-sync:DEBUG] buildSnapshot START: fs type=${typeof fs}, root=${root}, filter=${filter ? JSON.stringify(filter) : "none"}`);
    const files = await walkFiles(fs, root, filter);
-   console.log(`[zen-fs-sync] buildSnapshot: walkFiles returned ${files.length} files`);
+-  console.log(`[zen-fs-sync] buildSnapshot: walkFiles returned ${files.length} files: [${files.join(", ")}]`);
++  console.log(`[zen-fs-sync] buildSnapshot: walkFiles returned ${files.length} files`);
 +  console.log(`[zen-fs-sync:DEBUG] buildSnapshot files: [${files.join(", ")}]`);
    const snapshot = /* @__PURE__ */ new Map();
-   const normalizedRoot = normalizePath(root);
++  const normalizedRoot = normalizePath(root);
    for (const relPath of files) {
-@@ -171,13 +181,23 @@ async function ensureDir(fs, dirPath) {
+     const fullPath = resolvePath(normalizedRoot, relPath);
+     try {
+@@ -184,7 +170,8 @@ async function buildSnapshot(fs, root, filter) {
+         size: stat.size,
+         mtimeMs: stat.mtimeMs
+       });
+-    } catch {
++    } catch (err) {
++      log(`buildSnapshot: stat failed for ${fullPath}:`, err.message || err);
+     }
+   }
+   log(`buildSnapshot: done, ${snapshot.size} entries`);
+@@ -194,13 +181,23 @@ async function ensureDir(fs, dirPath) {
    const normalized = normalizePath(dirPath);
    const parts = normalized.split("/").filter(Boolean);
    let current = "";
@@ -72,7 +236,7 @@ index cf8e550..6da6f98 100644
  }
  var counter = 0;
  function generatePairId() {
-@@ -236,20 +256,32 @@ function diffSnapshots(source, target) {
+@@ -259,20 +256,32 @@ function diffSnapshots(source, target) {
  var log2 = createLogger("detector");
  var IncrementalDetector = class {
    async detect(source, target, root, prevSnapshots, filter) {
@@ -105,7 +269,7 @@ index cf8e550..6da6f98 100644
      return changes;
    }
  };
-@@ -457,6 +489,7 @@ var SyncPair = class {
+@@ -480,6 +489,7 @@ var SyncPair = class {
    // 内部实现
    // -----------------------------------------------------------------------
    async syncOneWay(src, tgt, directionLabel) {
@@ -113,7 +277,7 @@ index cf8e550..6da6f98 100644
      const changes = await this.detector.detect(
        src,
        tgt,
-@@ -464,15 +497,21 @@ var SyncPair = class {
+@@ -487,15 +497,21 @@ var SyncPair = class {
        this.sourceSnapshots,
        this.options.filter
      );
@@ -135,7 +299,7 @@ index cf8e550..6da6f98 100644
        switch (change.type) {
          case "created" /* Created */:
          case "modified" /* Modified */: {
-@@ -503,6 +542,7 @@ var SyncPair = class {
+@@ -526,6 +542,7 @@ var SyncPair = class {
                });
                if (isCreated) filesCreated++;
                else filesUpdated++;
@@ -143,7 +307,7 @@ index cf8e550..6da6f98 100644
                await ensureDir(tgt, tgtPath.substring(0, tgtPath.lastIndexOf("/")));
                await tgt.writeFile(tgtPath, resolved.content);
                continue;
-@@ -511,12 +551,16 @@ var SyncPair = class {
+@@ -534,12 +551,16 @@ var SyncPair = class {
            try {
              const content = await src.readFile(srcPath, "utf-8");
              log3(`WRITE ${change.type} ${srcPath} \u2192 ${tgtPath} (${content.length} bytes)`);
@@ -160,7 +324,7 @@ index cf8e550..6da6f98 100644
              filesSkipped++;
            }
            break;
-@@ -524,16 +568,20 @@ var SyncPair = class {
+@@ -547,16 +568,20 @@ var SyncPair = class {
          case "deleted" /* Deleted */: {
            try {
              log3(`DELETE ${tgtPath}`);
