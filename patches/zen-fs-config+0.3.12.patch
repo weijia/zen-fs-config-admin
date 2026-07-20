@@ -1,8 +1,127 @@
 diff --git a/node_modules/zen-fs-config/dist/index.mjs b/node_modules/zen-fs-config/dist/index.mjs
-index e795bca..6ab26e8 100644
+index e795bca..50fdc70 100644
 --- a/node_modules/zen-fs-config/dist/index.mjs
 +++ b/node_modules/zen-fs-config/dist/index.mjs
-@@ -1034,6 +1034,52 @@ var ConfigRepo = class {
+@@ -487,9 +487,27 @@ registerBackend("Gitee", async (options) => {
+   const baseUrl = options.baseUrl ?? "https://gitee.com/api/v5";
+   if (!owner || !repo) throw new Error('Gitee backend requires "owner" and "repo" options');
+   const fetchJson = async (url) => {
++    console.log(`[Gitee:API] fetchJson REQUEST: ${url}`);
+     const res = await fetch(url);
++    console.log(`[Gitee:API] fetchJson RESPONSE: status=${res.status} ${res.statusText}, url=${res.url}, headers:`, Object.fromEntries(res.headers.entries()));
++    const text = await res.text();
++    console.log(`[Gitee:API] fetchJson BODY (${text.length} bytes):`, text);
+     if (!res.ok) throw new Error(`Gitee API ${res.status}: ${url}`);
+-    return res.json();
++    try {
++      return JSON.parse(text);
++    } catch (e) {
++      console.log(`[Gitee:API] fetchJson JSON PARSE FAILED:`, e.message || e);
++      throw new Error(`Gitee API response is not valid JSON: ${text.substring(0, 200)}`);
++    }
++  };
++  const fetchRaw = async (url, method, body) => {
++    console.log(`[Gitee:API] fetchRaw REQUEST: method=${method} url=${url} body=`, body);
++    const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : void 0 });
++    console.log(`[Gitee:API] fetchRaw RESPONSE: status=${res.status} ${res.statusText}, url=${res.url}, headers:`, Object.fromEntries(res.headers.entries()));
++    const text = await res.text();
++    console.log(`[Gitee:API] fetchRaw BODY (${text.length} bytes):`, text);
++    if (!res.ok) console.log(`[Gitee:API] fetchRaw WARNING: non-OK status ${res.status}`);
++    return res;
+   };
+   const apiUrl = (path) => {
+     const p = path.startsWith("/") ? path.slice(1) : path;
+@@ -503,6 +521,7 @@ registerBackend("Gitee", async (options) => {
+   });
+   const backend = {
+     async readFile(path, ...args) {
++      console.log(`[Gitee] readFile('${path}') encoding=${args[0] || 'buffer'}`);
+       const data = await fetchJson(apiUrl(path));
+       if (data.content) {
+         const raw = Uint8Array.from(atob(data.content), (c) => c.charCodeAt(0));
+@@ -514,6 +533,7 @@ registerBackend("Gitee", async (options) => {
+     async writeFile(path, data, options2) {
+       const message = options2?.message || `Update ${path}`;
+       const content = typeof data === "string" ? btoa(unescape(encodeURIComponent(data))) : btoa(String.fromCharCode(...new Uint8Array(data)));
++      console.log(`[Gitee] writeFile('${path}') message='${message}' content.length=${typeof data === "string" ? data.length : data.byteLength}`);
+       const sha = await (async () => {
+         try {
+           const d = await fetchJson(apiUrl(path));
+@@ -522,17 +542,18 @@ registerBackend("Gitee", async (options) => {
+           return void 0;
+         }
+       })();
+-      await fetch(apiUrl(path), {
+-        method: "POST",
+-        headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ access_token: token, message, content, sha, branch })
+-      });
++      console.log(`[Gitee] writeFile('${path}') sha=${sha || '(new file)'}`);
++      await fetchRaw(apiUrl(path), "POST", { access_token: token, message, content, sha, branch });
+     },
+     async readdir(path) {
++      console.log(`[Gitee] readdir('${path}')`);
+       const data = await fetchJson(apiUrl(path));
+-      return Array.isArray(data) ? data.map((i) => i.name) : [];
++      const entries = Array.isArray(data) ? data.map((i) => i.name) : [];
++      console.log(`[Gitee] readdir('${path}') => [${entries.join(", ")}] (raw data was array=${Array.isArray(data)})`);
++      return entries;
+     },
+     async stat(path) {
++      console.log(`[Gitee] stat('${path}')`);
+       try {
+         const data = await fetchJson(apiUrl(path));
+         if (Array.isArray(data)) return ghStat({ type: "dir", size: 0 });
+@@ -542,6 +563,7 @@ registerBackend("Gitee", async (options) => {
+       }
+     },
+     async exists(path) {
++      console.log(`[Gitee] exists('${path}')`);
+       try {
+         await fetchJson(apiUrl(path));
+         return true;
+@@ -553,21 +575,16 @@ registerBackend("Gitee", async (options) => {
+       const dirPath = path.replace(/\/$/, "");
+       const keepPath = `${dirPath}/.gitkeep`;
+       const message = options2?.message || `Create directory ${dirPath}`;
+-      await fetch(apiUrl(keepPath), {
+-        method: "POST",
+-        headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ access_token: token, message, content: btoa(""), branch })
+-      });
++      console.log(`[Gitee] mkdir('${path}') keepPath='${keepPath}'`);
++      await fetchRaw(apiUrl(keepPath), "POST", { access_token: token, message, content: btoa(""), branch });
+     },
+     async unlink(path) {
++      console.log(`[Gitee] unlink('${path}')`);
+       const data = await fetchJson(apiUrl(path));
+-      await fetch(apiUrl(path), {
+-        method: "DELETE",
+-        headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ access_token: token, message: `Delete ${path}`, sha: data.sha, branch })
+-      });
++      await fetchRaw(apiUrl(path), "DELETE", { access_token: token, message: `Delete ${path}`, sha: data.sha, branch });
+     },
+     async rmdir(path) {
++      console.log(`[Gitee] rmdir('${path}')`);
+       const items = await fetchJson(apiUrl(path));
+       if (Array.isArray(items)) {
+         for (const item of items) {
+@@ -578,11 +595,13 @@ registerBackend("Gitee", async (options) => {
+       }
+     },
+     async rename(oldPath, newPath) {
++      console.log(`[Gitee] rename('${oldPath}' -> '${newPath}')`);
+       const content = await backend.readFile(oldPath);
+       await backend.writeFile(newPath, content);
+       await backend.unlink(oldPath);
+     }
+   };
++  console.log(`[Gitee] Backend initialized: owner=${owner}, repo=${repo}, branch=${branch}, baseUrl=${baseUrl}`);
+   return backend;
+ });
+ registerBackend("WebDAV", async (options) => {
+@@ -1034,6 +1053,52 @@ var ConfigRepo = class {
    // -----------------------------------------------------------------------
    async setupSync(backends, primaryBackendId) {
      console.log(`[ConfigRepo] setupSync: ${backends.length} backends, primary=${primaryBackendId}`);
@@ -55,7 +174,7 @@ index e795bca..6ab26e8 100644
      for (const desc of backends) {
        if (desc.id === primaryBackendId) continue;
        if (desc.enabled === false) {
-@@ -1046,23 +1092,47 @@ var ConfigRepo = class {
+@@ -1046,23 +1111,47 @@ var ConfigRepo = class {
          const syncable = backendToSyncableFS(instance);
          this.replicaBackends.set(desc.id, { instance, syncable });
          console.log(`[ConfigRepo] Replica ${desc.id} created successfully`);
