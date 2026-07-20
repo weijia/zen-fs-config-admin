@@ -56,7 +56,7 @@ function deserializeBackend(str: string): Partial<BackendDescriptor> & { type: s
 }
 
 export default function BackendsPage() {
-  const { repo, reconnect } = useConfigRepo();
+  const { repo, reconnect, primaryBackendId } = useConfigRepo();
   const [backends, setBackends] = useState<BackendDescriptor[]>([]);
   const [editing, setEditing] = useState<BackendDescriptor | null>(null);
   const [isNew, setIsNew] = useState(false);
@@ -144,6 +144,36 @@ export default function BackendsPage() {
     }
   };
 
+  const updateSyncRulesForEnabledChange = async (backendId: string, enabled: boolean) => {
+    if (!repo) return;
+    try {
+      const syncMeta = await repo.getSyncRules();
+      if (!syncMeta) return;
+      const rulesUpdated = syncMeta.rules.map(rule => {
+        if (rule.direction === 'none') return rule;
+        const current = rule.replicas ?? [];
+        if (enabled) {
+          return current.includes(backendId) ? rule : { ...rule, replicas: [...current, backendId] };
+        } else {
+          return { ...rule, replicas: current.filter(r => r !== backendId) };
+        }
+      });
+      await repo.updateSyncRules({ version: 1, rules: rulesUpdated });
+    } catch { /* ignore */ }
+  };
+
+  const handleToggleEnabled = async (b: BackendDescriptor) => {
+    if (!repo || b.id === primaryBackendId) return;
+    const enabled = (b as any).enabled === false;
+    const updated = backends.map(x => x.id === b.id ? { ...x, enabled } : x);
+    await repo.updateBackends({ version: 1, backends: updated });
+    await updateSyncRulesForEnabledChange(b.id, enabled);
+    setMessage(`${b.id} ${enabled ? 'enabled' : 'disabled'}`);
+    setTimeout(() => setMessage(''), 2000);
+    await loadBackends();
+    await reconnect();
+  };
+
   const handleSave = async () => {
     if (!repo || !formState.id || !formState.type) return;
     const newBackend: BackendDescriptor = {
@@ -151,7 +181,8 @@ export default function BackendsPage() {
       type: formState.type,
       options: formState.options ?? {},
       description: formState.description,
-    };
+      enabled: true,
+    } as any;
     let updated: BackendDescriptor[];
     if (isNew) {
       if (backends.some(b => b.id === newBackend.id)) {
@@ -169,7 +200,6 @@ export default function BackendsPage() {
     if (isNew) {
       try {
         const syncMeta = await repo.getSyncRules();
-        console.log('[sync] before add backend — syncRules:', JSON.stringify(syncMeta?.rules.map(r => ({ prefix: r.prefix, direction: r.direction, replicas: r.replicas }))));
         if (syncMeta) {
           const rulesUpdated = syncMeta.rules.map(rule =>
             rule.direction === 'none' ? rule : {
@@ -177,10 +207,9 @@ export default function BackendsPage() {
               replicas: [...(rule.replicas ?? []), newBackend.id],
             }
           );
-          console.log('[sync] after add backend — syncRules:', JSON.stringify(rulesUpdated.map(r => ({ prefix: r.prefix, direction: r.direction, replicas: r.replicas }))));
           await repo.updateSyncRules({ version: 1, rules: rulesUpdated });
         }
-      } catch (err) { console.warn('[sync] getSyncRules failed:', err); }
+      } catch { /* no sync rules file yet */ }
     }
 
     setEditing(null); setMessage('Saved, reconnecting...'); setTimeout(() => setMessage(''), 2000);
@@ -222,27 +251,47 @@ export default function BackendsPage() {
       {message && <div style={{ marginBottom: 16, color: 'var(--success)', fontSize: 13 }}>{message}</div>}
       <div className="table-wrapper">
         <table>
-          <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>Actions</th></tr></thead>
+          <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>
             {backends.map(b => {
               const bdef = getBackendTypeDef(b.type);
+              const isPrimary = b.id === primaryBackendId;
+              const isEnabled = isPrimary || (b as any).enabled !== false;
               return (
-                <tr key={b.id}>
-                  <td style={{ fontFamily: 'var(--font-mono)' }}>{b.id}</td>
+                <tr key={b.id} style={{ opacity: isEnabled ? 1 : 0.5 }}>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>
+                    {b.id} {isPrimary && <span className="badge badge-primary" style={{ marginLeft: 4 }}>primary</span>}
+                  </td>
                   <td><span style={{ marginRight: 6 }}>{bdef?.icon ?? '?'}</span>{bdef?.label ?? b.type}</td>
                   <td style={{ color: 'var(--text-secondary)' }}>{b.description || '-'}</td>
                   <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }} title={serializeBackend(b)}>
                     {serializeBackend(b)}
                   </td>
                   <td>
+                    {isPrimary ? (
+                      <span style={{ fontSize: 12, color: 'var(--success)' }}>always on</span>
+                    ) : (
+                      <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                        <input
+                          type="checkbox"
+                          checked={isEnabled}
+                          onChange={() => handleToggleEnabled(b)}
+                        />
+                        {isEnabled ? 'enabled' : 'disabled'}
+                      </label>
+                    )}
+                  </td>
+                  <td>
                     <button className="btn btn-sm btn-secondary" onClick={() => handleCopy(b)} title="Copy config">📋</button>
                     <button className="btn btn-sm btn-secondary" onClick={() => handleEdit(b)} style={{ marginLeft: 4 }}>Edit</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleRemove(b.id)} style={{ marginLeft: 4 }}>Remove</button>
+                    {!isPrimary && (
+                      <button className="btn btn-sm btn-danger" onClick={() => handleRemove(b.id)} style={{ marginLeft: 4 }}>Remove</button>
+                    )}
                   </td>
                 </tr>
               );
             })}
-            {backends.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No backends configured</td></tr>}
+            {backends.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No backends configured</td></tr>}
           </tbody>
         </table>
       </div>

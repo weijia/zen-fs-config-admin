@@ -26,6 +26,7 @@ interface ConfigRepoContextValue {
   connecting: boolean;
   reconnecting: boolean;
   error: string | null;
+  primaryBackendId: string | null;
   connect: (appId: string, options: ConfigRepoOptions) => Promise<void>;
   disconnect: () => Promise<void>;
   reconnect: () => Promise<void>;
@@ -37,6 +38,7 @@ const Context = createContext<ConfigRepoContextValue>({
   connecting: false,
   reconnecting: false,
   error: null,
+  primaryBackendId: null,
   connect: async () => {},
   disconnect: async () => {},
   reconnect: async () => {},
@@ -55,14 +57,16 @@ async function ensureSyncPairs(repo: IConfigRepo, appId: string, options: Config
     const syncMeta = await repo.getSyncRules();
     if (!backendsMeta || !syncMeta) return repo;
 
-    const replicaIds = backendsMeta.backends.map(b => b.id).filter(id => id !== options.primaryBackendId);
-    if (replicaIds.length === 0) return repo;
+    const enabledReplicaIds = backendsMeta.backends
+      .filter(b => b.id !== options.primaryBackendId && (b as any).enabled !== false)
+      .map(b => b.id);
+    if (enabledReplicaIds.length === 0) return repo;
 
     const needsRepair = syncMeta.rules.some(r => r.direction !== 'none' && (!r.replicas || r.replicas.length === 0));
     if (!needsRepair) return repo;
 
     const fixedRules = syncMeta.rules.map(rule =>
-      rule.direction === 'none' ? rule : { ...rule, replicas: replicaIds }
+      rule.direction === 'none' ? rule : { ...rule, replicas: enabledReplicaIds }
     );
     await repo.updateSyncRules({ version: 1, rules: fixedRules });
     await repo.dispose();
@@ -99,6 +103,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
   const [connecting, setConnecting] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [primaryBackendId, setPrimaryBackendId] = useState<string | null>(null);
   const connectParamsRef = useRef<{ appId: string; options: ConfigRepoOptions } | null>(null);
 
   const doConnect = useCallback(async (appId: string, options: ConfigRepoOptions) => {
@@ -111,6 +116,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
       saveConnectParams(appId, options);
       setRepo(r);
       setConnected(true);
+      setPrimaryBackendId(options.primaryBackendId);
       attachSyncDataLogger(r);
       console.log('[version] connected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
@@ -130,6 +136,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
     setRepo(null);
     setConnected(false);
     setError(null);
+    setPrimaryBackendId(null);
     connectParamsRef.current = null;
     clearConnectParams();
   }, [repo]);
@@ -163,6 +170,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
         connectParamsRef.current = saved;
         setRepo(r);
         setConnected(true);
+        setPrimaryBackendId(saved.options.primaryBackendId);
         attachSyncDataLogger(r);
         console.log('[version] auto-reconnected:', versionDisplay, '| build:', buildTimeDisplay);
       })
@@ -174,7 +182,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <Context.Provider value={{ repo, connected, connecting, reconnecting, error, connect, disconnect, reconnect }}>
+    <Context.Provider value={{ repo, connected, connecting, reconnecting, error, primaryBackendId, connect, disconnect, reconnect }}>
       {children}
     </Context.Provider>
   );
