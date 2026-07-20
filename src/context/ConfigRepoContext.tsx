@@ -135,15 +135,73 @@ async function walkFiles(fs: any, dir: string, prefix: string): Promise<string[]
  */
 async function syncOnceAndStop(repo: IConfigRepo) {
   try {
+    console.log('[sync-debug] === syncOnceAndStop START ===');
     // Enable debug logging (tag-based, only 'sync' and 'detector')
     setDebug('sync,detector');
+    console.log('[sync-debug] setDebug("sync,detector") called');
 
     // @ts-ignore
     const engine = repo.syncEngine;
-    if (!engine) return;
+    if (!engine) {
+      console.log('[sync-debug] NO syncEngine found on repo — cannot sync');
+      return;
+    }
+    console.log('[sync-debug] syncEngine found:', typeof engine);
 
     const pairsMap = (engine as any)._pairs;
-    if (!pairsMap) return;
+    if (!pairsMap) {
+      console.log('[sync-debug] NO _pairs map found on engine — cannot sync');
+      return;
+    }
+    console.log(`[sync-debug] pairsMap size=${pairsMap.size}`);
+
+    // [DEBUG] 在 sync 之前，列出每个 pair 的 source 和 target 在 root 下的实际文件
+    console.log('[sync-debug] --- PRE-SYNC: listing source/target files at pair root ---');
+    for (const [pairId, pair] of pairsMap.entries()) {
+      const prefix = pair.options?.filter?.includePrefixes?.[0] || '/';
+      const root = pair.root || '/';
+      const direction = pair.options?.direction;
+      console.log(`[sync-debug] pair=${pairId} root=${root} prefix=${prefix} direction=${direction}`);
+      console.log(`[sync-debug]   sourceSnapshots (before reset): ${pair.sourceSnapshots?.size || 0} entries`);
+      console.log(`[sync-debug]   state=${pair.state || 'unknown'}, watchers=${pair.watchers ? 'active (watch IS running!)' : 'none'}`);
+
+      // 直接用 pair.source 和 pair.target 列出 root 下文件
+      try {
+        const srcEntries = await pair.source.readdir(root);
+        console.log(`[sync-debug]   pair.source.readdir('${root}') => [${srcEntries.join(', ')}]`);
+      } catch (err: any) {
+        console.log(`[sync-debug]   pair.source.readdir('${root}') FAILED: ${err.message || err}`);
+      }
+      try {
+        const tgtEntries = await pair.target.readdir(root);
+        console.log(`[sync-debug]   pair.target.readdir('${root}') => [${tgtEntries.join(', ')}]`);
+      } catch (err: any) {
+        console.log(`[sync-debug]   pair.target.readdir('${root}') FAILED: ${err.message || err}`);
+      }
+
+      // [DEBUG] 如果 root 是 nodePath，也列出 '/' 下的文件，看全量文件在哪
+      if (root !== '/') {
+        console.log(`[sync-debug]   root is '${root}', also listing '/' to check if files exist elsewhere:`);
+        try {
+          const rootEntries = await pair.source.readdir('/');
+          console.log(`[sync-debug]   pair.source.readdir('/') => [${rootEntries.join(', ')}]`);
+          for (const entry of rootEntries) {
+            if (entry === '.' || entry.startsWith('.')) continue;
+            const entryPath = `/${entry}`;
+            try {
+              const stat = await pair.source.stat(entryPath);
+              if (typeof stat.isDirectory === 'function' && stat.isDirectory()) {
+                const sub = await pair.source.readdir(entryPath);
+                console.log(`[sync-debug]     ${entryPath}/ => [${sub.join(', ')}]`);
+              }
+            } catch { /* ignore */ }
+          }
+        } catch (err: any) {
+          console.log(`[sync-debug]   pair.source.readdir('/') FAILED: ${err.message || err}`);
+        }
+      }
+    }
+    console.log('[sync-debug] --- PRE-SYNC listing done ---');
 
     console.log('[sync-data] === SYNC ONCE START ===');
     for (const [pairId, pair] of pairsMap.entries()) {
@@ -152,6 +210,7 @@ async function syncOnceAndStop(repo: IConfigRepo) {
 
       console.log(`[sync-data] syncing ${pairId} ...`);
       console.log(`[sync-data]   pair: prefix=${prefix} dir=${pair.options?.direction} root=${root}`);
+      console.log(`[sync-debug]   NOTE: root='${root}'. If files you want to sync are NOT under this root, they will be INVISIBLE to sync!`);
 
       // Walk source and target files directly (before sync)
       let srcFiles: string[] = [];
@@ -167,6 +226,11 @@ async function syncOnceAndStop(repo: IConfigRepo) {
       console.log(`[sync-data]   source files (${srcFiles.length}): [${srcFiles.join(', ')}]`);
       console.log(`[sync-data]   target files (${tgtFiles.length}): [${tgtFiles.join(', ')}]`);
 
+      if (srcFiles.length === 0) {
+        console.warn(`[sync-debug]   *** WARNING: 0 source files at root='${root}' prefix='${prefix}' ***`);
+        console.warn(`[sync-debug]   *** Sync will detect 0 changes. Files elsewhere will NOT be synced. ***`);
+      }
+
       // Reset snapshots to force detector to compare source vs target (first-sync path)
       console.log(`[sync-data]   resetting sourceSnapshots (was ${pair.sourceSnapshots?.size || 0} entries)`);
       pair.sourceSnapshots = new Map();
@@ -174,8 +238,16 @@ async function syncOnceAndStop(repo: IConfigRepo) {
         pair.targetSnapshots = new Map();
       }
 
+      // [DEBUG] 检查是否有 watch 正在运行（可能导致竞态）
+      if (pair.watchers) {
+        console.warn(`[sync-debug]   *** WARNING: pair ${pairId} has active watchers! Potential race condition with syncOnceAndStop. ***`);
+        console.warn(`[sync-debug]   *** Watch is running (setupSync started it). syncOnceAndStop will unwatch after sync. ***`);
+      }
+
       // Call pair.sync() directly and await
+      console.log(`[sync-debug]   calling pair.sync() ...`);
       const result = await pair.sync();
+      console.log(`[sync-debug]   pair.sync() returned`);
       console.log(`[sync-data]   sync result: +${result?.filesCreated}/~${result?.filesUpdated}/-${result?.filesDeleted} skip:${result?.filesSkipped} changes:${result?.changes?.length || 0} ${result?.durationMs || '?'}ms`);
       if (result?.changes?.length) {
         result.changes.forEach((c: any) => {
@@ -190,14 +262,24 @@ async function syncOnceAndStop(repo: IConfigRepo) {
 
     // Disable debug logging after sync
     setDebug(false);
+    console.log('[sync-debug] setDebug(false) called');
 
     // Stop all watches to disable continuous polling
-    for (const pairId of engine.listPairs()) {
-      try { engine.unwatch(pairId); } catch { /* may not be watching */ }
+    const allPairs = engine.listPairs();
+    console.log(`[sync-debug] unwatching ${allPairs.length} pairs ...`);
+    for (const pairId of allPairs) {
+      try {
+        engine.unwatch(pairId);
+        console.log(`[sync-debug]   unwatch(${pairId}) OK`);
+      } catch (err: any) {
+        console.log(`[sync-debug]   unwatch(${pairId}) failed: ${err.message || err}`);
+      }
     }
     console.log('[sync-data] all watches stopped — manual sync only');
+    console.log('[sync-debug] === syncOnceAndStop DONE ===');
   } catch (err) {
     console.error('[sync-data] syncOnceAndStop error:', err);
+    console.error('[sync-debug] === syncOnceAndStop FAILED ===', err);
     setDebug(false);
   }
 }

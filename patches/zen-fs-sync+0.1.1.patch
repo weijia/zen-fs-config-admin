@@ -1,0 +1,183 @@
+diff --git a/node_modules/zen-fs-sync/dist/index.mjs b/node_modules/zen-fs-sync/dist/index.mjs
+index cf8e550..6da6f98 100644
+--- a/node_modules/zen-fs-sync/dist/index.mjs
++++ b/node_modules/zen-fs-sync/dist/index.mjs
+@@ -103,18 +103,25 @@ function simpleGlobMatch(str, pattern) {
+ async function walkFiles(fs, root, filter) {
+   const results = [];
+   const normalizedRoot = normalizePath(root);
++  console.log(`[zen-fs-sync:DEBUG] walkFiles START: root=${root}, normalizedRoot=${normalizedRoot}, filter=${filter ? JSON.stringify(filter) : "none"}`);
+   async function visit(dir) {
+     log(`readdir: ${dir}`);
+     let entries;
+     try {
+       entries = await fs.readdir(dir);
+       log(`readdir: ${dir} \u2192 ${entries.length} entries: [${entries.join(", ")}]`);
++      console.log(`[zen-fs-sync:DEBUG] walkFiles readdir('${dir}') OK: [${entries.join(", ")}]`);
+     } catch (err) {
+       console.warn(`[zen-fs-sync] walkFiles readdir FAILED on ${dir}:`, err.message || err);
++      console.log(`[zen-fs-sync:DEBUG] walkFiles readdir('${dir}') FAILED: ${err.message || err} (this dir will be SKIPPED, files inside won't be synced)`);
+       return;
+     }
+     for (const entry of entries) {
+       if (entry === ".zenfs-sync") continue;
++      if (entry.startsWith(".")) {
++        console.log(`[zen-fs-sync:DEBUG] walkFiles skipping hidden entry: ${entry}`);
++        continue;
++      }
+       const fullPath = resolvePath(dir, entry);
+       let relPath = fullPath.slice(normalizedRoot.length) || "/";
+       if (!relPath.startsWith("/")) relPath = "/" + relPath;
+@@ -128,6 +135,7 @@ async function walkFiles(fs, root, filter) {
+       }
+       if (stat.isDirectory()) {
+         log(`  \u2192 directory`);
++        console.log(`[zen-fs-sync:DEBUG] walkFiles descending into dir: ${fullPath} (relPath=${relPath})`);
+         await visit(fullPath);
+       } else if (stat.isFile()) {
+         log(`  \u2192 file`);
+@@ -147,8 +155,10 @@ async function walkFiles(fs, root, filter) {
+ }
+ async function buildSnapshot(fs, root, filter) {
+   console.log(`[zen-fs-sync] buildSnapshot: root=${root}`);
++  console.log(`[zen-fs-sync:DEBUG] buildSnapshot START: fs type=${typeof fs}, root=${root}, filter=${filter ? JSON.stringify(filter) : "none"}`);
+   const files = await walkFiles(fs, root, filter);
+   console.log(`[zen-fs-sync] buildSnapshot: walkFiles returned ${files.length} files`);
++  console.log(`[zen-fs-sync:DEBUG] buildSnapshot files: [${files.join(", ")}]`);
+   const snapshot = /* @__PURE__ */ new Map();
+   const normalizedRoot = normalizePath(root);
+   for (const relPath of files) {
+@@ -171,13 +181,23 @@ async function ensureDir(fs, dirPath) {
+   const normalized = normalizePath(dirPath);
+   const parts = normalized.split("/").filter(Boolean);
+   let current = "";
++  console.log(`[zen-fs-sync:DEBUG] ensureDir: dirPath=${dirPath}, normalized=${normalized}, parts=[${parts.join(",")}]`);
+   for (const part of parts) {
+     current += `/${part}`;
+     const exists = await fs.exists(current);
++    console.log(`[zen-fs-sync:DEBUG] ensureDir: checking ${current} exists=${exists}`);
+     if (!exists) {
+-      await fs.mkdir(current, { recursive: true });
++      console.log(`[zen-fs-sync:DEBUG] ensureDir: mkdir ${current} (recursive)`);
++      try {
++        await fs.mkdir(current, { recursive: true });
++        console.log(`[zen-fs-sync:DEBUG] ensureDir: mkdir ${current} OK`);
++      } catch (err) {
++        console.log(`[zen-fs-sync:DEBUG] ensureDir: mkdir ${current} FAILED: ${err.message || err}`);
++        throw err;
++      }
+     }
+   }
++  console.log(`[zen-fs-sync:DEBUG] ensureDir: DONE for ${dirPath}`);
+ }
+ var counter = 0;
+ function generatePairId() {
+@@ -236,20 +256,32 @@ function diffSnapshots(source, target) {
+ var log2 = createLogger("detector");
+ var IncrementalDetector = class {
+   async detect(source, target, root, prevSnapshots, filter) {
++    console.log(`[zen-fs-sync:DEBUG] detect START: root=${root}, prevSnapshots=${prevSnapshots?.size || 0} entries, filter=${filter ? JSON.stringify(filter) : "none"}`);
+     if (!prevSnapshots || prevSnapshots.size === 0) {
+       log2(`[FULL] no prevSnapshots, scanning source + target (root=${root})`);
++      console.log(`[zen-fs-sync:DEBUG] detect FULL mode: scanning source AND target (root=${root})`);
+       const currentSnap = await buildSnapshot(source, root, filter);
+       const targetSnap = await buildSnapshot(target, root, filter);
+       log2(`[FULL] source files: ${currentSnap.size}, target files: ${targetSnap.size}`);
++      console.log(`[zen-fs-sync:DEBUG] detect FULL: source=${currentSnap.size} files, target=${targetSnap.size} files`);
++      if (currentSnap.size === 0 && targetSnap.size === 0) {
++        console.log(`[zen-fs-sync:DEBUG] *** WARNING: BOTH source AND target have 0 files at root='${root}'! ***`);
++        console.log(`[zen-fs-sync:DEBUG] *** This means root directory is empty or doesn't exist on both sides. ***`);
++        console.log(`[zen-fs-sync:DEBUG] *** root='${root}' may be wrong — should it be '/' for full-directory sync? ***`);
++      }
+       const changes2 = diffSnapshots(currentSnap, targetSnap);
+       log2(`[FULL] detected ${changes2.length} changes:`, changes2.map((c) => `${c.type}:${c.path}`));
++      console.log(`[zen-fs-sync:DEBUG] detect FULL: detected ${changes2.length} changes: [${changes2.map((c) => `${c.type}:${c.path}`).join(", ")}]`);
+       return changes2;
+     }
+     log2(`[INCREMENTAL] scanning source vs prevSnapshots (${prevSnapshots.size} entries, root=${root})`);
++    console.log(`[zen-fs-sync:DEBUG] detect INCREMENTAL mode: scanning source vs prevSnapshots (${prevSnapshots.size} entries, root=${root})`);
+     const currentSourceSnap = await buildSnapshot(source, root, filter);
+     log2(`[INCREMENTAL] current source files: ${currentSourceSnap.size}`);
++    console.log(`[zen-fs-sync:DEBUG] detect INCREMENTAL: current source=${currentSourceSnap.size} files, prev=${prevSnapshots.size} entries`);
+     const changes = diffSnapshots(currentSourceSnap, prevSnapshots);
+     log2(`[INCREMENTAL] detected ${changes.length} changes:`, changes.map((c) => `${c.type}:${c.path}`));
++    console.log(`[zen-fs-sync:DEBUG] detect INCREMENTAL: detected ${changes.length} changes: [${changes.map((c) => `${c.type}:${c.path}`).join(", ")}]`);
+     return changes;
+   }
+ };
+@@ -457,6 +489,7 @@ var SyncPair = class {
+   // 内部实现
+   // -----------------------------------------------------------------------
+   async syncOneWay(src, tgt, directionLabel) {
++    console.log(`[zen-fs-sync:DEBUG] syncOneWay START: direction=${directionLabel}, root=${this.root}, sourceSnapshots=${this.sourceSnapshots?.size || 0} entries`);
+     const changes = await this.detector.detect(
+       src,
+       tgt,
+@@ -464,15 +497,21 @@ var SyncPair = class {
+       this.sourceSnapshots,
+       this.options.filter
+     );
++    console.log(`[zen-fs-sync:DEBUG] syncOneWay: detect returned ${changes.length} changes`);
+     this.sourceSnapshots = await buildSnapshot(src, this.root, this.options.filter);
++    console.log(`[zen-fs-sync:DEBUG] syncOneWay: rebuilt sourceSnapshots = ${this.sourceSnapshots.size} entries`);
+     let filesCreated = 0;
+     let filesUpdated = 0;
+     let filesDeleted = 0;
+     let filesSkipped = 0;
+     const conflicts = [];
++    if (changes.length === 0) {
++      console.log(`[zen-fs-sync:DEBUG] syncOneWay: NO CHANGES to sync (0 changes detected). Nothing will be written.`);
++    }
+     for (const change of changes) {
+       const srcPath = resolvePath(this.root, change.path);
+       const tgtPath = resolvePath(this.root, change.path);
++      console.log(`[zen-fs-sync:DEBUG] syncOneWay: processing change: ${change.type} path=${change.path} srcPath=${srcPath} tgtPath=${tgtPath}`);
+       switch (change.type) {
+         case "created" /* Created */:
+         case "modified" /* Modified */: {
+@@ -503,6 +542,7 @@ var SyncPair = class {
+               });
+               if (isCreated) filesCreated++;
+               else filesUpdated++;
++              console.log(`[zen-fs-sync:DEBUG] syncOneWay: WRITE (conflict resolved ${resolved.strategy}) ${srcPath} -> ${tgtPath} (${resolved.content.length} bytes)`);
+               await ensureDir(tgt, tgtPath.substring(0, tgtPath.lastIndexOf("/")));
+               await tgt.writeFile(tgtPath, resolved.content);
+               continue;
+@@ -511,12 +551,16 @@ var SyncPair = class {
+           try {
+             const content = await src.readFile(srcPath, "utf-8");
+             log3(`WRITE ${change.type} ${srcPath} \u2192 ${tgtPath} (${content.length} bytes)`);
++            console.log(`[zen-fs-sync:DEBUG] syncOneWay: WRITE ${change.type} ${srcPath} -> ${tgtPath} (${content.length} bytes)`);
+             await ensureDir(tgt, tgtPath.substring(0, tgtPath.lastIndexOf("/")));
++            console.log(`[zen-fs-sync:DEBUG] syncOneWay: ensureDir done for ${tgtPath.substring(0, tgtPath.lastIndexOf("/"))}`);
+             await tgt.writeFile(tgtPath, content);
++            console.log(`[zen-fs-sync:DEBUG] syncOneWay: writeFile DONE for ${tgtPath}`);
+             if (isCreated) filesCreated++;
+             else filesUpdated++;
+           } catch (err) {
+             log3(`WRITE FAIL ${change.type} ${srcPath} \u2192 ${tgtPath}:`, err);
++            console.log(`[zen-fs-sync:DEBUG] syncOneWay: WRITE FAIL ${change.type} ${srcPath} -> ${tgtPath}: ${err.message || err}`);
+             filesSkipped++;
+           }
+           break;
+@@ -524,16 +568,20 @@ var SyncPair = class {
+         case "deleted" /* Deleted */: {
+           try {
+             log3(`DELETE ${tgtPath}`);
++            console.log(`[zen-fs-sync:DEBUG] syncOneWay: DELETE ${tgtPath}`);
+             await tgt.unlink(tgtPath);
++            console.log(`[zen-fs-sync:DEBUG] syncOneWay: DELETE DONE for ${tgtPath}`);
+             filesDeleted++;
+           } catch (err) {
+             log3(`DELETE FAIL ${tgtPath}:`, err);
++            console.log(`[zen-fs-sync:DEBUG] syncOneWay: DELETE FAIL ${tgtPath}: ${err.message || err}`);
+             filesSkipped++;
+           }
+           break;
+         }
+       }
+     }
++    console.log(`[zen-fs-sync:DEBUG] syncOneWay DONE: +${filesCreated}/~${filesUpdated}/-${filesDeleted} skip:${filesSkipped}`);
+     return {
+       pairId: this.pairId,
+       direction: this.options.direction,
