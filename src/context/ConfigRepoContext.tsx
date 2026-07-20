@@ -106,16 +106,33 @@ function attachSyncDataLogger(repo: IConfigRepo) {
   const pairIds: string[] = engine.listPairs ? engine.listPairs() : [];
   for (const pairId of pairIds) {
     engine.on(pairId, 'sync:start', (e: any) => {
-      console.log('[sync-data] sync:start', e.pairId, e.timestamp);
+      console.log('[sync-data] sync:start', e.pairId, new Date(e.timestamp).toLocaleTimeString());
     });
     engine.on(pairId, 'sync:end', (e: any) => {
-      console.log('[sync-data] sync:end', e.pairId, 'result:', e.result);
+      const r = e.result;
+      console.log('[sync-data] sync:end', e.pairId,
+        'created:', r.filesCreated,
+        'updated:', r.filesUpdated,
+        'deleted:', r.filesDeleted,
+        'skipped:', r.filesSkipped,
+        'changes:', r.changes?.length || 0,
+        'conflicts:', r.conflicts?.length || 0,
+        'duration:', r.durationMs + 'ms'
+      );
+      if (r.changes?.length) {
+        r.changes.forEach((c: any) => {
+          console.log('[sync-data]   change:', c.type, c.path);
+        });
+      }
+      if (r.filesSkipped > 0) {
+        console.warn('[sync-data] sync:end', e.pairId, 'WARNING:', r.filesSkipped, 'files skipped (write failed)');
+      }
     });
     engine.on(pairId, 'sync:error', (e: any) => {
       console.error('[sync-data] sync:error', e.pairId, e.error);
     });
     engine.on(pairId, 'conflict', (e: any) => {
-      console.warn('[sync-data] conflict', e.pairId, e.path);
+      console.warn('[sync-data] conflict', e.pairId, e.conflict?.path);
     });
   }
 }
