@@ -10,12 +10,9 @@ interface TreeNode {
 }
 
 async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
-  const indent = '  '.repeat(depth);
-  console.log(`[buildTree] readdir(${dir})...`);
   const entries: TreeNode[] = [];
   try {
     const items = await fs.readdir(dir);
-    console.log(`[buildTree] readdir(${dir}) => ${items.length} items:`, items);
     for (const item of items) {
       const fullPath = dir === '/' ? `/${item}` : `${dir}/${item}`;
       try {
@@ -33,20 +30,18 @@ async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
         } else {
           try { await fs.readdir(fullPath); isDir = true; } catch { isDir = false; }
         }
-        console.log(`${indent}[buildTree] stat(${fullPath}) => isDir=${isDir}, size=${stat.size}`);
         const node: TreeNode = { name: item, path: fullPath, isDir, children: [] };
         if (node.isDir) {
           node.children = await buildTree(fs, fullPath, depth + 1);
         }
         entries.push(node);
-      } catch (err: any) {
-        console.warn(`${indent}[buildTree] stat(${fullPath}) failed:`, err.message);
+      } catch {
+        // stat failed for this entry, skip
       }
     }
-  } catch (err: any) {
-    console.warn(`[buildTree] readdir(${dir}) failed:`, err.message);
+  } catch {
+    // readdir failed for this directory
   }
-  console.log(`[buildTree] ${dir} => ${entries.length} entries`);
   return entries.sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     return a.name.localeCompare(b.name);
@@ -97,12 +92,8 @@ export default function FilesPage() {
   const refreshTree = useCallback(async () => {
     if (!repo) return;
     setLoading(true);
-    console.log('[FilesPage] refreshTree start, rootFS:', !!repo.rootFS);
     try {
-      const t0 = performance.now();
       const rootNodes = await buildTree(repo.rootFS.promises, '/');
-      const t1 = performance.now();
-      console.log(`[FilesPage] refreshTree done in ${(t1 - t0).toFixed(0)}ms, ${rootNodes.length} root entries`);
       setTree(rootNodes);
     } catch (err: any) {
       console.error('[FilesPage] refreshTree error:', err);
@@ -117,8 +108,6 @@ export default function FilesPage() {
 
   useEffect(() => {
     if (!repo || !effectivePath) return;
-    console.log('[FilesPage] loading file:', effectivePath);
-    const t0 = performance.now();
     repo.rootFS.promises.stat(effectivePath).then(async (s: any) => {
       let isFile = typeof s.isFile === 'function' ? s.isFile() : !(typeof s.isDirectory === 'function' ? s.isDirectory() : s.isDirectory);
       if (!isFile) {
@@ -130,7 +119,6 @@ export default function FilesPage() {
           // readdir failed, trust stat
         }
       }
-      console.log(`[FilesPage] stat(${effectivePath}) took ${(performance.now() - t0).toFixed(0)}ms, isFile=${isFile}`);
       if (isFile) {
         return repo.rootFS.promises.readFile(effectivePath, 'utf-8');
       }
@@ -141,7 +129,6 @@ export default function FilesPage() {
       const decoded = text != null
         ? (typeof text === 'string' ? text : new TextDecoder().decode(text as Uint8Array))
         : null;
-      console.log(`[FilesPage] readFile done in ${(performance.now() - t0).toFixed(0)}ms, ${decoded ? decoded.length + ' chars' : 'null'}`);
       if (decoded != null) {
         setContent(decoded);
         setOriginalContent(decoded);

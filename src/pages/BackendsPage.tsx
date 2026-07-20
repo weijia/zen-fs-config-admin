@@ -169,6 +169,7 @@ export default function BackendsPage() {
     if (isNew) {
       try {
         const syncMeta = await repo.getSyncRules();
+        console.log('[sync] before add backend — syncRules:', JSON.stringify(syncMeta?.rules.map(r => ({ prefix: r.prefix, direction: r.direction, replicas: r.replicas }))));
         if (syncMeta) {
           const rulesUpdated = syncMeta.rules.map(rule =>
             rule.direction === 'none' ? rule : {
@@ -176,9 +177,10 @@ export default function BackendsPage() {
               replicas: [...(rule.replicas ?? []), newBackend.id],
             }
           );
+          console.log('[sync] after add backend — syncRules:', JSON.stringify(rulesUpdated.map(r => ({ prefix: r.prefix, direction: r.direction, replicas: r.replicas }))));
           await repo.updateSyncRules({ version: 1, rules: rulesUpdated });
         }
-      } catch { /* no sync rules file yet */ }
+      } catch (err) { console.warn('[sync] getSyncRules failed:', err); }
     }
 
     setEditing(null); setMessage('Saved, reconnecting...'); setTimeout(() => setMessage(''), 2000);

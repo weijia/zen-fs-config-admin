@@ -35,10 +35,14 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
     setConnecting(true);
     setError(null);
     try {
+      console.log('[sync] createConfigRepo start, appId:', appId, 'primaryBackendId:', options.primaryBackendId);
       const r = await createConfigRepo(appId, options);
       connectParamsRef.current = { appId, options };
       setRepo(r);
       setConnected(true);
+      const syncStatuses = r.getSyncStatuses();
+      console.log('[sync] createConfigRepo done, syncPairs:', syncStatuses.size);
+      syncStatuses.forEach((v, k) => console.log('[sync]   pair:', k, '→ status:', v));
     } catch (err: any) {
       setError(err.message || String(err));
       throw err;
@@ -62,10 +66,15 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
     if (!params) return;
     setReconnecting(true);
     try {
+      console.log('[sync] reconnect start (dispose old repo, create new with same params)');
       if (repo) await repo.dispose();
       const r = await createConfigRepo(params.appId, params.options);
       setRepo(r);
+      const syncStatuses = r.getSyncStatuses();
+      console.log('[sync] reconnect done, syncPairs:', syncStatuses.size);
+      syncStatuses.forEach((v, k) => console.log('[sync]   pair:', k, '→ status:', v));
     } catch (err: any) {
+      console.error('[sync] reconnect failed:', err);
       setError(err.message || String(err));
     } finally {
       setReconnecting(false);
