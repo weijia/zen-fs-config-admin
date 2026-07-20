@@ -130,6 +130,7 @@ async function walkFiles(fs: any, dir: string, prefix: string): Promise<string[]
 
 /**
  * Sync once and stop watching. No continuous polling.
+ * Reset sourceSnapshots to force "first sync" path (source vs target comparison).
  */
 async function syncOnceAndStop(repo: IConfigRepo) {
   try {
@@ -137,18 +138,36 @@ async function syncOnceAndStop(repo: IConfigRepo) {
     const engine = repo.syncEngine;
     if (!engine) return;
 
-    const pairIds: string[] = engine.listPairs ? engine.listPairs() : [];
-    if (pairIds.length === 0) return;
+    const pairsMap = (engine as any)._pairs;
+    if (!pairsMap) return;
 
     console.log('[sync-data] === SYNC ONCE START ===');
-    for (const pairId of pairIds) {
+    for (const [pairId, pair] of pairsMap.entries()) {
       console.log(`[sync-data] syncing ${pairId}...`);
-      await engine.sync(pairId);
+      console.log(`[sync-data]   before: sourceSnapshots.size=${pair.sourceSnapshots?.size || 0}`);
+
+      // Reset snapshots to force detector to compare source vs target (first-sync path)
+      pair.sourceSnapshots = new Map();
+      if (pair.options?.direction === 'bi-directional') {
+        pair.targetSnapshots = new Map();
+      }
+
+      // Call pair.sync() directly and await (engine.sync() does NOT await pair.sync())
+      const result = await pair.sync();
+      console.log(`[sync-data]   after: sourceSnapshots.size=${pair.sourceSnapshots?.size || 0}`);
+      console.log(`[sync-data]   result:`, JSON.stringify({
+        filesCreated: result?.filesCreated,
+        filesUpdated: result?.filesUpdated,
+        filesDeleted: result?.filesDeleted,
+        filesSkipped: result?.filesSkipped,
+        changes: result?.changes?.length,
+        durationMs: result?.durationMs,
+      }));
     }
     console.log('[sync-data] === SYNC ONCE DONE ===');
 
     // Stop all watches to disable continuous polling
-    for (const pairId of pairIds) {
+    for (const pairId of engine.listPairs()) {
       try { engine.unwatch(pairId); } catch { /* may not be watching */ }
     }
     console.log('[sync-data] all watches stopped — manual sync only');
@@ -159,6 +178,7 @@ async function syncOnceAndStop(repo: IConfigRepo) {
 
 /**
  * Attach verbose sync logging: file lists, readFile, writeFile, sync results.
+ * Also wraps pair.sync() to log detector internals.
  */
 function attachSyncDataLogger(repo: IConfigRepo) {
   // @ts-ignore
@@ -175,6 +195,27 @@ function attachSyncDataLogger(repo: IConfigRepo) {
 
     // Log pair setup
     console.log(`[sync-data] pair: ${pairId} prefix=${prefix} dir=${pair.options?.direction} root=${pair.root}`);
+
+    // Wrap pair.sync() to log detector state
+    const origSync = pair.sync;
+    pair.sync = async () => {
+      console.log(`[sync-data] pair.sync() START ${pairId}`);
+      console.log(`[sync-data]   sourceSnapshots.size=${pair.sourceSnapshots?.size || 0} targetSnapshots.size=${pair.targetSnapshots?.size || 0}`);
+      try {
+        const result = await origSync();
+        console.log(`[sync-data] pair.sync() DONE ${pairId}`, JSON.stringify({
+          filesCreated: result?.filesCreated,
+          filesUpdated: result?.filesUpdated,
+          filesDeleted: result?.filesDeleted,
+          changes: result?.changes?.length,
+          durationMs: result?.durationMs,
+        }));
+        return result;
+      } catch (err: any) {
+        console.error(`[sync-data] pair.sync() ERROR ${pairId}:`, err.message || err);
+        throw err;
+      }
+    };
 
     // Wrap writeFile to log every write operation
     const origWrite = pair.target.writeFile;
