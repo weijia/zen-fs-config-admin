@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import { createConfigRepo, type IConfigRepo, type ConfigRepoOptions } from 'zen-fs-config';
+import { setDebug } from 'zen-fs-sync';
 import { versionDisplay, buildTimeDisplay } from '../version';
 
 const STORAGE_KEY = 'zen-fs-config-admin:connect-params';
@@ -130,11 +131,13 @@ async function walkFiles(fs: any, dir: string, prefix: string): Promise<string[]
 
 /**
  * Sync once and stop watching. No continuous polling.
- * Reset sourceSnapshots to force "first sync" path (source vs target comparison).
- * Prints source/target file lists before syncing (bypasses event system).
+ * Enable zen-fs-sync debug logging before syncing.
  */
 async function syncOnceAndStop(repo: IConfigRepo) {
   try {
+    // Enable debug logging (tag-based, only 'sync' and 'detector')
+    setDebug('sync,detector');
+
     // @ts-ignore
     const engine = repo.syncEngine;
     if (!engine) return;
@@ -150,8 +153,7 @@ async function syncOnceAndStop(repo: IConfigRepo) {
       console.log(`[sync-data] syncing ${pairId} ...`);
       console.log(`[sync-data]   pair: prefix=${prefix} dir=${pair.options?.direction} root=${root}`);
 
-      // Walk source and target files directly (before sync, before reset)
-      console.log(`[sync-data]   walking source files (root=${root}, prefix=${prefix})...`);
+      // Walk source and target files directly (before sync)
       let srcFiles: string[] = [];
       let tgtFiles: string[] = [];
       try {
@@ -186,6 +188,9 @@ async function syncOnceAndStop(repo: IConfigRepo) {
     }
     console.log('[sync-data] === SYNC ONCE DONE ===');
 
+    // Disable debug logging after sync
+    setDebug(false);
+
     // Stop all watches to disable continuous polling
     for (const pairId of engine.listPairs()) {
       try { engine.unwatch(pairId); } catch { /* may not be watching */ }
@@ -193,68 +198,7 @@ async function syncOnceAndStop(repo: IConfigRepo) {
     console.log('[sync-data] all watches stopped — manual sync only');
   } catch (err) {
     console.error('[sync-data] syncOnceAndStop error:', err);
-  }
-}
-
-/**
- * Attach verbose sync logging: readFile, writeFile, sync results.
- */
-function attachSyncDataLogger(repo: IConfigRepo) {
-  // @ts-ignore
-  const engine = repo.syncEngine;
-  if (!engine) return;
-
-  const pairIds: string[] = engine.listPairs ? engine.listPairs() : [];
-  const pairsMap = (engine as any)._pairs;
-
-  for (const pairId of pairIds) {
-    const pair = pairsMap?.get?.(pairId);
-    if (!pair) continue;
-
-    console.log(`[sync-data] pair: ${pairId} prefix=${pair.options?.filter?.includePrefixes?.[0] || '/'} dir=${pair.options?.direction} root=${pair.root}`);
-
-    // Wrap writeFile to log every write operation
-    const origWrite = pair.target.writeFile;
-    pair.target.writeFile = async (path: string, content: string | Uint8Array) => {
-      const len = typeof content === 'string' ? content.length : content?.byteLength || 0;
-      console.log(`[sync-data] WRITE → target:${pairId} ${path} (${len} bytes)`);
-      try {
-        const result = await origWrite(path, content);
-        console.log(`[sync-data] WRITE OK → target:${pairId} ${path}`);
-        return result;
-      } catch (err: any) {
-        console.error(`[sync-data] WRITE FAIL → target:${pairId} ${path}:`, err.message || err);
-        throw err;
-      }
-    };
-
-    // Wrap readFile to log every read operation
-    const origRead = pair.source.readFile;
-    pair.source.readFile = async (path: string, encoding?: string) => {
-      console.log(`[sync-data] READ  ← source:${pairId} ${path}`);
-      try {
-        const content = await origRead(path, encoding);
-        const len = typeof content === 'string' ? content.length : content?.byteLength || 0;
-        console.log(`[sync-data] READ  OK ← source:${pairId} ${path} (${len} bytes)`);
-        return content;
-      } catch (err: any) {
-        console.error(`[sync-data] READ  FAIL ← source:${pairId} ${path}:`, err.message || err);
-        throw err;
-      }
-    };
-
-    // sync:end: print result summary
-    engine.on(pairId, 'sync:end', (e: any) => {
-      const r = e.result;
-      console.log(`[sync-data] sync:end ${e.pairId} +${r.filesCreated}/~${r.filesUpdated}/-${r.filesDeleted} skip:${r.filesSkipped} changes:${r.changes?.length || 0} ${r.durationMs}ms`);
-    });
-
-    engine.on(pairId, 'sync:error', (e: any) => {
-      console.error(`[sync-data] sync:error ${e.pairId}:`, e.error);
-    });
-    engine.on(pairId, 'conflict', (e: any) => {
-      console.warn(`[sync-data] conflict ${e.pairId}:`, e.conflict?.path);
-    });
+    setDebug(false);
   }
 }
 
@@ -278,7 +222,6 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
       setRepo(r);
       setConnected(true);
       setPrimaryBackendId(options.primaryBackendId);
-      attachSyncDataLogger(r);
       await syncOnceAndStop(r);
       console.log('[version] connected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
@@ -312,7 +255,6 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
       let r = await createConfigRepo(params.appId, params.options);
       r = await ensureSyncPairs(r, params.appId, params.options);
       setRepo(r);
-      attachSyncDataLogger(r);
       await syncOnceAndStop(r);
       console.log('[version] reconnected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
@@ -334,7 +276,6 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
         setRepo(r);
         setConnected(true);
         setPrimaryBackendId(saved.options.primaryBackendId);
-        attachSyncDataLogger(r);
         await syncOnceAndStop(r);
         console.log('[version] auto-reconnected:', versionDisplay, '| build:', buildTimeDisplay);
       })
