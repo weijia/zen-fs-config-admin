@@ -148,7 +148,7 @@ async function syncOnceAndStop(repo: IConfigRepo) {
     }
     console.log('[sync-debug] syncEngine found:', typeof engine);
 
-    const pairsMap = (engine as any)._pairs;
+    const pairsMap = (engine as any).pairs || (engine as any)._pairs;
     if (!pairsMap) {
       console.log('[sync-debug] NO _pairs map found on engine — cannot sync');
       return;

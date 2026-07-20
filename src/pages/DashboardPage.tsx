@@ -99,7 +99,7 @@ export default function DashboardPage() {
         setDiagResult({ error: 'No sync engine available' });
         return;
       }
-      const pairsMap = (engine as any)._pairs;
+      const pairsMap = (engine as any).pairs || (engine as any)._pairs;
       if (!pairsMap) {
         setDiagResult({ error: 'Cannot access internal pairs map' });
         return;
@@ -161,7 +161,7 @@ export default function DashboardPage() {
       // @ts-ignore
       const engine = repo?.syncEngine;
       if (!engine) return;
-      const pairsMap = (engine as any)._pairs;
+      const pairsMap = (engine as any).pairs || (engine as any)._pairs;
       if (!pairsMap) return;
 
       for (const [pairId, pair] of pairsMap.entries()) {

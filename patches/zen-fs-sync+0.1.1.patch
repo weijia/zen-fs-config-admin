@@ -99,10 +99,10 @@ index b413a9b..562243a 100644
    }
    log(`buildSnapshot: done, ${snapshot.size} entries`);
 diff --git a/node_modules/zen-fs-sync/dist/index.mjs b/node_modules/zen-fs-sync/dist/index.mjs
-index 106b596..6da6f98 100644
+index 106b596..e0dc7f5 100644
 --- a/node_modules/zen-fs-sync/dist/index.mjs
 +++ b/node_modules/zen-fs-sync/dist/index.mjs
-@@ -103,22 +103,29 @@ function simpleGlobMatch(str, pattern) {
+@@ -103,14 +103,17 @@ function simpleGlobMatch(str, pattern) {
  async function walkFiles(fs, root, filter) {
    const results = [];
    const normalizedRoot = normalizePath(root);
@@ -122,11 +122,7 @@ index 106b596..6da6f98 100644
        return;
      }
      for (const entry of entries) {
-       if (entry === ".zenfs-sync") continue;
-+      if (entry.startsWith(".")) {
-+        console.log(`[zen-fs-sync:DEBUG] walkFiles skipping hidden entry: ${entry}`);
-+        continue;
-+      }
+@@ -118,7 +121,7 @@ async function walkFiles(fs, root, filter) {
        const fullPath = resolvePath(dir, entry);
        let relPath = fullPath.slice(normalizedRoot.length) || "/";
        if (!relPath.startsWith("/")) relPath = "/" + relPath;
@@ -135,7 +131,7 @@ index 106b596..6da6f98 100644
        let stat;
        try {
          stat = await fs.stat(fullPath);
-@@ -127,54 +134,33 @@ async function walkFiles(fs, root, filter) {
+@@ -127,54 +130,33 @@ async function walkFiles(fs, root, filter) {
          continue;
        }
        if (stat.isDirectory()) {
@@ -201,7 +197,7 @@ index 106b596..6da6f98 100644
    for (const relPath of files) {
      const fullPath = resolvePath(normalizedRoot, relPath);
      try {
-@@ -184,7 +170,8 @@ async function buildSnapshot(fs, root, filter) {
+@@ -184,7 +166,8 @@ async function buildSnapshot(fs, root, filter) {
          size: stat.size,
          mtimeMs: stat.mtimeMs
        });
@@ -211,7 +207,7 @@ index 106b596..6da6f98 100644
      }
    }
    log(`buildSnapshot: done, ${snapshot.size} entries`);
-@@ -194,13 +181,23 @@ async function ensureDir(fs, dirPath) {
+@@ -194,13 +177,23 @@ async function ensureDir(fs, dirPath) {
    const normalized = normalizePath(dirPath);
    const parts = normalized.split("/").filter(Boolean);
    let current = "";
@@ -236,7 +232,7 @@ index 106b596..6da6f98 100644
  }
  var counter = 0;
  function generatePairId() {
-@@ -259,20 +256,32 @@ function diffSnapshots(source, target) {
+@@ -259,20 +252,32 @@ function diffSnapshots(source, target) {
  var log2 = createLogger("detector");
  var IncrementalDetector = class {
    async detect(source, target, root, prevSnapshots, filter) {
@@ -269,7 +265,7 @@ index 106b596..6da6f98 100644
      return changes;
    }
  };
-@@ -480,6 +489,7 @@ var SyncPair = class {
+@@ -480,6 +485,7 @@ var SyncPair = class {
    // 内部实现
    // -----------------------------------------------------------------------
    async syncOneWay(src, tgt, directionLabel) {
@@ -277,7 +273,7 @@ index 106b596..6da6f98 100644
      const changes = await this.detector.detect(
        src,
        tgt,
-@@ -487,15 +497,21 @@ var SyncPair = class {
+@@ -487,15 +493,21 @@ var SyncPair = class {
        this.sourceSnapshots,
        this.options.filter
      );
@@ -299,7 +295,7 @@ index 106b596..6da6f98 100644
        switch (change.type) {
          case "created" /* Created */:
          case "modified" /* Modified */: {
-@@ -526,6 +542,7 @@ var SyncPair = class {
+@@ -526,6 +538,7 @@ var SyncPair = class {
                });
                if (isCreated) filesCreated++;
                else filesUpdated++;
@@ -307,7 +303,7 @@ index 106b596..6da6f98 100644
                await ensureDir(tgt, tgtPath.substring(0, tgtPath.lastIndexOf("/")));
                await tgt.writeFile(tgtPath, resolved.content);
                continue;
-@@ -534,12 +551,16 @@ var SyncPair = class {
+@@ -534,12 +547,16 @@ var SyncPair = class {
            try {
              const content = await src.readFile(srcPath, "utf-8");
              log3(`WRITE ${change.type} ${srcPath} \u2192 ${tgtPath} (${content.length} bytes)`);
@@ -324,7 +320,7 @@ index 106b596..6da6f98 100644
              filesSkipped++;
            }
            break;
-@@ -547,16 +568,20 @@ var SyncPair = class {
+@@ -547,16 +564,20 @@ var SyncPair = class {
          case "deleted" /* Deleted */: {
            try {
              log3(`DELETE ${tgtPath}`);
