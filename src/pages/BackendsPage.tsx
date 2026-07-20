@@ -3,6 +3,58 @@ import { useConfigRepo } from '../context/ConfigRepoContext';
 import type { BackendDescriptor, BackendsMeta } from 'zen-fs-config';
 import { BACKEND_TYPES, getBackendTypeDef } from '../backend-types';
 
+// --- Serialize / Deserialize backend config to/from a one-line string ---
+// Format: type:id:key=value,key=value
+// Example: GitHub:my-repo:owner=weijia,repo=zen-fs-config,branch=main
+function serializeBackend(b: BackendDescriptor): string {
+  const opts = Object.entries(b.options ?? {})
+    .filter(([, v]) => v !== '')
+    .map(([k, v]) => `${k}=${v}`)
+    .join(',');
+  const parts = [b.type, b.id];
+  if (opts) parts.push(opts);
+  if (b.description) parts.push(`desc=${b.description}`);
+  return parts.join(':');
+}
+
+function deserializeBackend(str: string): Partial<BackendDescriptor> & { type: string } | null {
+  const firstColon = str.indexOf(':');
+  if (firstColon < 0) return null;
+  const type = str.slice(0, firstColon);
+  const rest = str.slice(firstColon + 1);
+  const def = getBackendTypeDef(type);
+  if (!def) return null;
+
+  const secondColon = rest.indexOf(':');
+  let id: string;
+  let optionsStr: string;
+  if (secondColon < 0) {
+    id = rest;
+    optionsStr = '';
+  } else {
+    id = rest.slice(0, secondColon);
+    optionsStr = rest.slice(secondColon + 1);
+  }
+
+  const options: Record<string, string> = { ...def.defaultOptions };
+  let description = '';
+  if (optionsStr) {
+    for (const pair of optionsStr.split(',')) {
+      const eq = pair.indexOf('=');
+      if (eq < 0) continue;
+      const key = pair.slice(0, eq);
+      const value = pair.slice(eq + 1);
+      if (key === 'desc') {
+        description = value;
+      } else {
+        options[key] = value;
+      }
+    }
+  }
+
+  return { type, id, options, description };
+}
+
 export default function BackendsPage() {
   const { repo, reconnect } = useConfigRepo();
   const [backends, setBackends] = useState<BackendDescriptor[]>([]);
@@ -10,6 +62,8 @@ export default function BackendsPage() {
   const [isNew, setIsNew] = useState(false);
   const [formState, setFormState] = useState<Partial<BackendDescriptor> & { type: string }>({ type: 'InMemory' });
   const [message, setMessage] = useState('');
+  const [importStr, setImportStr] = useState('');
+  const [importError, setImportError] = useState('');
 
   const loadBackends = useCallback(async () => {
     if (!repo) return;
@@ -30,6 +84,8 @@ export default function BackendsPage() {
   const handleNew = () => {
     setEditing(null);
     setIsNew(true);
+    setImportStr('');
+    setImportError('');
     const def = getBackendTypeDef('IndexedDB')!;
     const autoId = `${def.type.toLowerCase()}-${Date.now()}`;
     setFormState({ id: autoId, type: 'IndexedDB', options: { ...def.defaultOptions }, description: '' });
@@ -51,6 +107,41 @@ export default function BackendsPage() {
       ...formState,
       options: { ...(formState.options ?? {}), [key]: value },
     });
+  };
+
+  const handleImport = () => {
+    setImportError('');
+    const parsed = deserializeBackend(importStr.trim());
+    if (!parsed || !parsed.type || !parsed.id) {
+      setImportError('Invalid format. Expected: type:id:key=value,key=value');
+      return;
+    }
+    const def = getBackendTypeDef(parsed.type);
+    if (!def) {
+      setImportError(`Unknown backend type: ${parsed.type}`);
+      return;
+    }
+    setFormState({
+      type: parsed.type,
+      id: parsed.id,
+      options: parsed.options ?? { ...def.defaultOptions },
+      description: parsed.description ?? '',
+    });
+    setImportStr('');
+    setMessage('Imported from string');
+    setTimeout(() => setMessage(''), 2000);
+  };
+
+  const handleCopy = async (b: BackendDescriptor) => {
+    const str = serializeBackend(b);
+    try {
+      await navigator.clipboard.writeText(str);
+      setMessage(`Copied: ${str}`);
+      setTimeout(() => setMessage(''), 3000);
+    } catch {
+      setMessage(`Config: ${str}`);
+      setTimeout(() => setMessage(''), 5000);
+    }
   };
 
   const handleSave = async () => {
@@ -129,7 +220,7 @@ export default function BackendsPage() {
       {message && <div style={{ marginBottom: 16, color: 'var(--success)', fontSize: 13 }}>{message}</div>}
       <div className="table-wrapper">
         <table>
-          <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Actions</th></tr></thead>
+          <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>Actions</th></tr></thead>
           <tbody>
             {backends.map(b => {
               const bdef = getBackendTypeDef(b.type);
@@ -138,14 +229,18 @@ export default function BackendsPage() {
                   <td style={{ fontFamily: 'var(--font-mono)' }}>{b.id}</td>
                   <td><span style={{ marginRight: 6 }}>{bdef?.icon ?? '?'}</span>{bdef?.label ?? b.type}</td>
                   <td style={{ color: 'var(--text-secondary)' }}>{b.description || '-'}</td>
+                  <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }} title={serializeBackend(b)}>
+                    {serializeBackend(b)}
+                  </td>
                   <td>
-                    <button className="btn btn-sm btn-secondary" onClick={() => handleEdit(b)}>Edit</button>
+                    <button className="btn btn-sm btn-secondary" onClick={() => handleCopy(b)} title="Copy config">📋</button>
+                    <button className="btn btn-sm btn-secondary" onClick={() => handleEdit(b)} style={{ marginLeft: 4 }}>Edit</button>
                     <button className="btn btn-sm btn-danger" onClick={() => handleRemove(b.id)} style={{ marginLeft: 4 }}>Remove</button>
                   </td>
                 </tr>
               );
             })}
-            {backends.length === 0 && <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No backends configured</td></tr>}
+            {backends.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No backends configured</td></tr>}
           </tbody>
         </table>
       </div>
@@ -195,6 +290,24 @@ export default function BackendsPage() {
               <label className="form-label">Description</label>
               <input className="form-input" value={formState.description ?? ''} onChange={e => setFormState({ ...formState, description: e.target.value })} />
             </div>
+
+            {isNew && (
+              <div className="form-group">
+                <label className="form-label">Import from config string</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    className="form-input"
+                    value={importStr}
+                    onChange={e => setImportStr(e.target.value)}
+                    placeholder="type:id:key=value,key=value"
+                    style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                  />
+                  <button className="btn btn-sm btn-secondary" onClick={handleImport}>Import</button>
+                </div>
+                <p className="form-hint">Format: type:id:key=value,key=value (e.g. GitHub:my-repo:owner=weijia,repo=zen-fs-config)</p>
+                {importError && <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 4 }}>{importError}</div>}
+              </div>
+            )}
 
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => { setEditing(null); setIsNew(false); }}>Cancel</button>
