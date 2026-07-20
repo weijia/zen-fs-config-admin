@@ -103,18 +103,21 @@ function attachSyncDataLogger(repo: IConfigRepo) {
   const engine = repo.syncEngine;
   if (!engine) return;
 
-  engine.on('sync:start', (e: any) => {
-    console.log('[sync-data] sync:start', e.pairId, e.timestamp);
-  });
-  engine.on('sync:end', (e: any) => {
-    console.log('[sync-data] sync:end', e.pairId, 'result:', e.result);
-  });
-  engine.on('sync:error', (e: any) => {
-    console.error('[sync-data] sync:error', e.pairId, e.error);
-  });
-  engine.on('conflict', (e: any) => {
-    console.warn('[sync-data] conflict', e.pairId, e.path);
-  });
+  const pairIds: string[] = engine.listPairs ? engine.listPairs() : [];
+  for (const pairId of pairIds) {
+    engine.on(pairId, 'sync:start', (e: any) => {
+      console.log('[sync-data] sync:start', e.pairId, e.timestamp);
+    });
+    engine.on(pairId, 'sync:end', (e: any) => {
+      console.log('[sync-data] sync:end', e.pairId, 'result:', e.result);
+    });
+    engine.on(pairId, 'sync:error', (e: any) => {
+      console.error('[sync-data] sync:error', e.pairId, e.error);
+    });
+    engine.on(pairId, 'conflict', (e: any) => {
+      console.warn('[sync-data] conflict', e.pairId, e.path);
+    });
+  }
 }
 
 export function ConfigRepoProvider({ children }: { children: ReactNode }) {
