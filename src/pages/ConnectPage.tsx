@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
-import type { ConfigRepoOptions, BackendDescriptor, SyncRule } from 'zen-fs-config';
+import type { ConfigRepoOptions } from 'zen-fs-config';
 import { BACKEND_TYPES, getBackendTypeDef } from '../backend-types';
 import { versionDisplay, buildTimeDisplay } from '../version';
 
@@ -72,35 +72,6 @@ export default function ConnectPage() {
     }
 
     try {
-      const backendDescriptors: Omit<BackendDescriptor, 'description'>[] = backends.map(b => ({
-        id: b.id,
-        type: b.type,
-        options: { ...b.options },
-      }));
-
-      const syncRules: SyncRule[] = [
-        {
-          prefix: `/${appId.trim()}/`,
-          direction: 'one-way' as any,
-          conflictStrategy: 'source-wins' as any,
-          replicas: backends.filter(b => !b.isPrimary).map(b => b.id),
-        },
-        {
-          prefix: '/shared/',
-          direction: 'bi-directional' as any,
-          conflictStrategy: 'merge' as any,
-          replicas: backends.filter(b => !b.isPrimary).map(b => b.id),
-        },
-        { prefix: '/nodes/', direction: 'none' as any },
-        {
-          prefix: '/.meta/',
-          direction: 'one-way' as any,
-          conflictStrategy: 'source-wins' as any,
-          replicas: backends.filter(b => !b.isPrimary).map(b => b.id),
-        },
-      ];
-
-
       const options: ConfigRepoOptions = {
         primaryBackendId: primary.id,
         backendInfo: {
@@ -108,10 +79,6 @@ export default function ConnectPage() {
           options: { ...primary.options },
         },
         cache: { storeType: 'MemoryCacheStore', ttlMs: parseInt(cacheTtl) || 60000 },
-        bootstrap: {
-          backends: backendDescriptors,
-          syncRules,
-        },
       };
 
       await connect(appId.trim(), options);

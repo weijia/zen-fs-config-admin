@@ -7,7 +7,6 @@ const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: '◈' },
   { to: '/files', label: 'Files', icon: '▣' },
   { to: '/backends', label: 'Backends', icon: '◆' },
-  { to: '/sync-rules', label: 'Sync Rules', icon: '⇄' },
   { to: '/conflicts', label: 'Conflicts', icon: '⚠' },
   { to: '/nodes', label: 'Nodes', icon: '◉' },
 ];

@@ -144,30 +144,11 @@ export default function BackendsPage() {
     }
   };
 
-  const updateSyncRulesForEnabledChange = async (backendId: string, enabled: boolean) => {
-    if (!repo) return;
-    try {
-      const syncMeta = await repo.getSyncRules();
-      if (!syncMeta) return;
-      const rulesUpdated = syncMeta.rules.map(rule => {
-        if (rule.direction === 'none') return rule;
-        const current = rule.replicas ?? [];
-        if (enabled) {
-          return current.includes(backendId) ? rule : { ...rule, replicas: [...current, backendId] };
-        } else {
-          return { ...rule, replicas: current.filter(r => r !== backendId) };
-        }
-      });
-      await repo.updateSyncRules({ version: 1, rules: rulesUpdated });
-    } catch { /* ignore */ }
-  };
-
   const handleToggleEnabled = async (b: BackendDescriptor) => {
     if (!repo || b.id === primaryBackendId) return;
     const enabled = (b as any).enabled === false;
     const updated = backends.map(x => x.id === b.id ? { ...x, enabled } : x);
     await repo.updateBackends({ version: 1, backends: updated });
-    await updateSyncRulesForEnabledChange(b.id, enabled);
     await repo.syncMetaToReplicas();
     setMessage(`${b.id} ${enabled ? 'enabled' : 'disabled'}`);
     setTimeout(() => setMessage(''), 2000);
@@ -197,22 +178,6 @@ export default function BackendsPage() {
     const meta: BackendsMeta = { version: 1, backends: updated };
     await repo.updateBackends(meta);
 
-    // Auto-update sync rules: add new backend to replicas of active rules
-    if (isNew) {
-      try {
-        const syncMeta = await repo.getSyncRules();
-        if (syncMeta) {
-          const rulesUpdated = syncMeta.rules.map(rule =>
-            rule.direction === 'none' ? rule : {
-              ...rule,
-              replicas: [...(rule.replicas ?? []), newBackend.id],
-            }
-          );
-          await repo.updateSyncRules({ version: 1, rules: rulesUpdated });
-        }
-      } catch { /* no sync rules file yet */ }
-    }
-
     // Immediately sync .meta/ to all replicas so topology propagates
     await repo.syncMetaToReplicas();
 
@@ -225,18 +190,6 @@ export default function BackendsPage() {
     if (!repo) return;
     const updated = backends.filter(b => b.id !== id);
     await repo.updateBackends({ version: 1, backends: updated });
-
-    // Auto-update sync rules: remove backend from all replicas
-    try {
-      const syncMeta = await repo.getSyncRules();
-      if (syncMeta) {
-        const rulesUpdated = syncMeta.rules.map(rule => ({
-          ...rule,
-          replicas: (rule.replicas ?? []).filter((r: string) => r !== id),
-        }));
-        await repo.updateSyncRules({ version: 1, rules: rulesUpdated });
-      }
-    } catch { /* ignore */ }
 
     // Immediately sync .meta/ to all replicas
     await repo.syncMetaToReplicas();

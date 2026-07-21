@@ -6,7 +6,6 @@ import ConnectPage from './pages/ConnectPage';
 import DashboardPage from './pages/DashboardPage';
 import FilesPage from './pages/FilesPage';
 import BackendsPage from './pages/BackendsPage';
-import SyncRulesPage from './pages/SyncRulesPage';
 import ConflictsPage from './pages/ConflictsPage';
 import NodesPage from './pages/NodesPage';
 
@@ -29,7 +28,6 @@ function AppRoutes() {
         <Route path="/files" element={<FilesPage />} />
         <Route path="/files/*" element={<FilesPage />} />
         <Route path="/backends" element={<BackendsPage />} />
-        <Route path="/sync-rules" element={<SyncRulesPage />} />
         <Route path="/conflicts" element={<ConflictsPage />} />
         <Route path="/nodes" element={<NodesPage />} />
         <Route path="/connect" element={<Navigate to="/dashboard" replace />} />
