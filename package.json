@@ -21,7 +21,7 @@
     "zen-fs-gitee": "github:weijia/zen-fs-gitee#main",
     "zen-fs-github": "github:weijia/zen-fs-github#main",
     "zen-fs-remotestoragejs": "^1.2.3",
-    "zen-fs-sync": "github:weijia/zen-fs-sync#main"
+    "zen-fs-sync": "^0.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
