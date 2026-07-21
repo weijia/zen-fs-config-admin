@@ -168,6 +168,7 @@ export default function BackendsPage() {
     const updated = backends.map(x => x.id === b.id ? { ...x, enabled } : x);
     await repo.updateBackends({ version: 1, backends: updated });
     await updateSyncRulesForEnabledChange(b.id, enabled);
+    await repo.syncMetaToReplicas();
     setMessage(`${b.id} ${enabled ? 'enabled' : 'disabled'}`);
     setTimeout(() => setMessage(''), 2000);
     await loadBackends();
@@ -212,6 +213,9 @@ export default function BackendsPage() {
       } catch { /* no sync rules file yet */ }
     }
 
+    // Immediately sync .meta/ to all replicas so topology propagates
+    await repo.syncMetaToReplicas();
+
     setEditing(null); setMessage('Saved, reconnecting...'); setTimeout(() => setMessage(''), 2000);
     await loadBackends();
     await reconnect();
@@ -233,6 +237,9 @@ export default function BackendsPage() {
         await repo.updateSyncRules({ version: 1, rules: rulesUpdated });
       }
     } catch { /* ignore */ }
+
+    // Immediately sync .meta/ to all replicas
+    await repo.syncMetaToReplicas();
 
     await loadBackends();
     await reconnect();

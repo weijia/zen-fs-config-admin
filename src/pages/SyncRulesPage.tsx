@@ -36,6 +36,7 @@ export default function SyncRulesPage() {
     const meta: SyncRulesMeta = { version: 1, rules: updated };
     await repo.updateSyncRules(meta);
     setEditing(null); setIsNew(false);
+    await repo.syncMetaToReplicas();
     await loadData();
     await reconnect();
   };
@@ -45,6 +46,7 @@ export default function SyncRulesPage() {
     const updated = rules.filter(r => r.prefix !== prefix);
     const meta: SyncRulesMeta = { version: 1, rules: updated };
     await repo.updateSyncRules(meta);
+    await repo.syncMetaToReplicas();
     await loadData();
     await reconnect();
   };
