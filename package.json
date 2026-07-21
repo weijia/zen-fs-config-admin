@@ -17,7 +17,7 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
     "zen-fs-cache": "^1.0.1",
-    "zen-fs-config": "^0.3.20",
+    "zen-fs-config": "github:weijia/zen-fs-config#main",
     "zen-fs-gitee": "github:weijia/zen-fs-gitee#main",
     "zen-fs-github": "github:weijia/zen-fs-github#main",
     "zen-fs-remotestoragejs": "^1.2.2",

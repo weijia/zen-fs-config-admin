@@ -33,6 +33,7 @@ interface ConfigRepoContextValue {
   primaryBackendId: string | null;
   connect: (appId: string, options: ConfigRepoOptions) => Promise<void>;
   disconnect: () => Promise<void>;
+  /** Dispose old repo, create new one, sync once. Safe to call while UI is active. */
   reconnect: () => Promise<void>;
 }
 
@@ -50,10 +51,6 @@ const Context = createContext<ConfigRepoContextValue>({
 
 /**
  * Sync once and stop watching.
- *
- * IMPORTANT: Must unwatch ALL pairs FIRST to avoid race condition where
- * the watch poll triggers pair.sync() while we also call pair.sync().
- * SyncPair throws "already syncing" if called while another sync is running.
  */
 async function syncOnceAndStop(repo: IConfigRepo) {
   try {
@@ -66,7 +63,7 @@ async function syncOnceAndStop(repo: IConfigRepo) {
     const pairsMap = (engine as any).pairs || (engine as any)._pairs;
     if (!pairsMap || pairsMap.size === 0) return;
 
-    // CRITICAL: Stop all watchers BEFORE syncing to avoid race condition
+    // Stop all watchers BEFORE syncing to avoid race condition
     const allPairs = engine.listPairs();
     for (const pairId of allPairs) {
       try { engine.unwatch(pairId); } catch { /* may not be watching */ }
@@ -74,15 +71,12 @@ async function syncOnceAndStop(repo: IConfigRepo) {
 
     console.log(`[sync] syncing ${pairsMap.size} pair(s) ...`);
 
-    // Now sync each pair sequentially
     for (const [pairId, pair] of pairsMap.entries()) {
       try {
-        // Reset snapshots to force full comparison (first-sync path)
         pair.sourceSnapshots = new Map();
         if (pair.options?.direction === 'bi-directional') {
           pair.targetSnapshots = new Map();
         }
-
         const result = await pair.sync();
         console.log(`[sync] ${pairId}: +${result?.filesCreated}/~${result?.filesUpdated}/-${result?.filesDeleted} skip:${result?.filesSkipped} ${result?.durationMs || '?'}ms`);
       } catch (err: any) {
@@ -106,6 +100,8 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [primaryBackendId, setPrimaryBackendId] = useState<string | null>(null);
   const connectParamsRef = useRef<{ appId: string; options: ConfigRepoOptions } | null>(null);
+  /** Ref to the current repo so reconnect can safely dispose it even after a React re-render. */
+  const repoRef = useRef<IConfigRepo | null>(null);
 
   const doConnect = useCallback(async (appId: string, options: ConfigRepoOptions) => {
     setConnecting(true);
@@ -114,6 +110,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
       const r = await createConfigRepo(appId, options);
       connectParamsRef.current = { appId, options };
       saveConnectParams(appId, options);
+      repoRef.current = r;
       setRepo(r);
       setConnected(true);
       setPrimaryBackendId(options.primaryBackendId);
@@ -132,31 +129,42 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
   }, [doConnect]);
 
   const disconnect = useCallback(async () => {
-    if (repo) await repo.dispose();
+    const oldRepo = repoRef.current;
+    repoRef.current = null;
     setRepo(null);
     setConnected(false);
     setError(null);
     setPrimaryBackendId(null);
     connectParamsRef.current = null;
     clearConnectParams();
-  }, [repo]);
+    // Dispose AFTER clearing state so UI never sees a disposed repo
+    try { if (oldRepo) await oldRepo.dispose(); } catch { /* already disposed */ }
+  }, []);
 
   const reconnect = useCallback(async () => {
     const params = connectParamsRef.current;
     if (!params) return;
     setReconnecting(true);
     try {
-      if (repo) await repo.dispose();
-      const r = await createConfigRepo(params.appId, params.options);
-      setRepo(r);
-      await syncOnceAndStop(r);
+      // Create new repo FIRST, then swap and dispose old
+      const newRepo = await createConfigRepo(params.appId, params.options);
+
+      // Swap refs atomically — UI immediately sees the new (non-disposed) repo
+      const oldRepo = repoRef.current;
+      repoRef.current = newRepo;
+      setRepo(newRepo);
+
+      // Dispose old repo AFTER swap (best-effort, errors ignored)
+      try { if (oldRepo) await oldRepo.dispose(); } catch { /* already disposed */ }
+
+      await syncOnceAndStop(newRepo);
       console.log('[version] reconnected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
       setError(err.message || String(err));
     } finally {
       setReconnecting(false);
     }
-  }, [repo]);
+  }, []); // no repo dependency — uses repoRef instead
 
   // Auto-reconnect on page refresh
   useEffect(() => {
@@ -166,6 +174,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
     createConfigRepo(saved.appId, saved.options)
       .then(async r => {
         connectParamsRef.current = saved;
+        repoRef.current = r;
         setRepo(r);
         setConnected(true);
         setPrimaryBackendId(saved.options.primaryBackendId);
