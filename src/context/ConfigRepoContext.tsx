@@ -2,6 +2,9 @@ import { createContext, useContext, useState, useCallback, useRef, useEffect, ty
 import { createConfigRepo, type IConfigRepo, type ConfigRepoOptions } from 'zen-fs-config';
 import { setDebug } from 'zen-fs-sync';
 import { versionDisplay, buildTimeDisplay } from '../version';
+// Register all backend types (IndexedDB, WebStorage, GitHub, Gitee, WebDAV, RemoteStorage, ...)
+// This must be imported BEFORE createConfigRepo() is called.
+import '../register-backends';
 
 const STORAGE_KEY = 'zen-fs-config-admin:connect-params';
 
