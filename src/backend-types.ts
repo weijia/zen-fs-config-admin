@@ -83,6 +83,17 @@ export const BACKEND_TYPES: BackendTypeDef[] = [
     ],
     defaultOptions: { url: '', username: '', password: '', rootPath: '/' },
   },
+  {
+    type: 'RemoteStorage',
+    label: 'RemoteStorage',
+    icon: '\u{1F4E1}',
+    fields: [
+      { key: 'href', label: 'User Address (href)', type: 'text', placeholder: 'user@5apps.com', required: true },
+      { key: 'token', label: 'Bearer Token', type: 'password', placeholder: 'rs-xxxxxxxx', required: true },
+      { key: 'basePath', label: 'Base Path', type: 'text', placeholder: '/zen-fs-config/' },
+    ],
+    defaultOptions: { href: '', token: '', basePath: '/' },
+  },
 ];
 
 export function getBackendTypeDef(type: string): BackendTypeDef | undefined {
