@@ -214,17 +214,8 @@ export default function FilesPage() {
     setDeleting(true);
     setMessage('');
     try {
-      let isFile = true;
-      try {
-        const s = await repo.rootFS.promises.stat(effectivePath);
-        if (s.mode !== undefined && (s.mode & 0o40000) === 0o40000) isFile = false;
-      } catch { /* stat failed */ }
-
-      if (isFile) {
-        await repo.rootFS.promises.unlink(effectivePath);
-      } else {
-        await repo.rootFS.promises.rmdir(effectivePath);
-      }
+      // Use repo.deleteFile() which writes a tombstone for cross-backend sync
+      await repo.deleteFile(effectivePath);
       setMessage('Deleted');
       setContent('');
       setOriginalContent('');

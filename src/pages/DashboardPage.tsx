@@ -273,11 +273,10 @@ export default function DashboardPage() {
         {pairs.map(([id, s]) => {
           const r = s.lastResult;
           const statusColor = s.state === 'syncing' ? 'var(--warning)'
-            : s.state === 'error' ? 'var(--danger)'
-            : r && r.filesSkipped > 0 ? 'var(--warning)'
+            : !r ? 'var(--text-muted)'
+            : r.filesSkipped > 0 ? 'var(--warning)'
             : 'var(--success)';
           const statusText = s.state === 'syncing' ? 'Syncing...'
-            : s.state === 'error' ? 'Error'
             : !r ? 'Not synced yet'
             : `Last: +${r.filesCreated}/~${r.filesUpdated}/-${r.filesDeleted} in ${r.durationMs}ms`;
 
