@@ -4,13 +4,22 @@
  * Works both locally and in CI.
  */
 import { execSync } from 'child_process';
-import { writeFileSync } from 'fs';
+import { writeFileSync, readFileSync } from 'fs';
 
 function run(cmd) {
   try {
     return execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
   } catch {
     return '';
+  }
+}
+
+function readPkgVersion(name) {
+  try {
+    const json = JSON.parse(readFileSync(new URL(`../node_modules/${name}/package.json`, import.meta.url), 'utf-8'));
+    return json.version || 'unknown';
+  } catch {
+    return 'unknown';
   }
 }
 
@@ -30,7 +39,17 @@ const buildTime = new Date().toLocaleString('zh-CN', {
   hour12: false,
 });
 
-const payload = { version, buildTime, sha, branch, tag };
+const payload = {
+  version, buildTime, sha, branch, tag,
+  deps: {
+    'zen-fs-config': readPkgVersion('zen-fs-config'),
+    'zen-fs-sync': readPkgVersion('zen-fs-sync'),
+    'zen-fs-remotestoragejs': readPkgVersion('zen-fs-remotestoragejs'),
+    'zen-fs-cache': readPkgVersion('zen-fs-cache'),
+    '@zenfs/core': readPkgVersion('@zenfs/core'),
+    '@zenfs/dom': readPkgVersion('@zenfs/dom'),
+  },
+};
 
 writeFileSync(
   new URL('../src/version.json', import.meta.url),

@@ -1,7 +1,15 @@
 {
-  "version": "main-4ca13b7",
-  "buildTime": "2026/07/22 07:22:40",
-  "sha": "4ca13b7",
+  "version": "main-a522c50",
+  "buildTime": "2026/07/22 14:55:36",
+  "sha": "a522c50",
   "branch": "main",
-  "tag": ""
+  "tag": "",
+  "deps": {
+    "zen-fs-config": "0.3.25",
+    "zen-fs-sync": "0.2.2",
+    "zen-fs-remotestoragejs": "1.2.11",
+    "zen-fs-cache": "1.0.1",
+    "@zenfs/core": "2.5.7",
+    "@zenfs/dom": "1.2.9"
+  }
 }
