@@ -17,11 +17,11 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
     "zen-fs-cache": "^1.0.1",
-    "zen-fs-config": "^0.3.26",
+    "zen-fs-config": "^0.3.25",
     "zen-fs-gitee": "^1.1.0",
     "zen-fs-github": "github:weijia/zen-fs-github#main",
     "zen-fs-remotestoragejs": "^1.2.12",
-    "zen-fs-sync": "^0.2.2"
+    "zen-fs-sync": "^0.2.1"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
