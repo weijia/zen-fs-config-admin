@@ -24,7 +24,7 @@ export default function NodesPage() {
         if (entry.startsWith('.')) continue;
         const nodePath = `/nodes/${entry}`;
         const stat = await repo.fs.promises.stat(nodePath);
-        if (stat.isDirectory()) {
+        if (stat.mode !== undefined && (stat.mode & 0o40000) === 0o40000) {
           const files = await listFiles(repo.fs.promises, nodePath);
           nodeInfos.push({ id: entry, files });
         }
@@ -155,7 +155,7 @@ async function listFiles(fs: any, dir: string): Promise<string[]> {
       const fullPath = dir === '/' ? `/${entry}` : `${dir}/${entry}`;
       try {
         const stat = await fs.stat(fullPath);
-        if (stat.isDirectory()) {
+        if (stat.mode !== undefined && (stat.mode & 0o40000) === 0o40000) {
           results.push(...await listFiles(fs, fullPath));
         } else {
           results.push(fullPath);
