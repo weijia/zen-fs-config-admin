@@ -272,14 +272,24 @@ export default function DashboardPage() {
         )}
         {pairs.map(([id, s]) => {
           const r = s.lastResult;
+          const statusColor = s.state === 'syncing' ? 'var(--warning)'
+            : s.state === 'error' ? 'var(--danger)'
+            : r && r.filesSkipped > 0 ? 'var(--warning)'
+            : 'var(--success)';
+          const statusText = s.state === 'syncing' ? 'Syncing...'
+            : s.state === 'error' ? 'Error'
+            : !r ? 'Not synced yet'
+            : `Last: +${r.filesCreated}/~${r.filesUpdated}/-${r.filesDeleted} in ${r.durationMs}ms`;
+
           return (
-            <div key={id} style={{ marginBottom: 12, padding: 12, background: 'var(--bg-secondary)', borderRadius: 6 }}>
+            <div key={id} style={{ marginBottom: 12, padding: 12, background: 'var(--bg-secondary)', borderRadius: 6, borderLeft: `3px solid ${statusColor}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <div>
                   <span className="badge badge-primary">{id}</span>
-                  <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-muted)' }}>
-                    {s.state} {s.watching ? '(watching)' : ''}
+                  <span style={{ marginLeft: 8, fontSize: 12, color: statusColor, fontWeight: 600 }}>
+                    {statusText}
                   </span>
+                  {s.watching && <span className="badge" style={{ marginLeft: 8, background: 'var(--info)', color: '#fff' }}>watch</span>}
                 </div>
                 <button
                   className="btn btn-sm btn-secondary"
@@ -311,8 +321,8 @@ export default function DashboardPage() {
                   <div style={{ color: r?.filesSkipped ? 'var(--danger)' : 'inherit' }}>{r?.filesSkipped ?? '-'}</div>
                 </div>
                 <div>
-                  <div style={{ color: 'var(--text-muted)' }}>Changes</div>
-                  <div>{r?.changes?.length ?? '-'}</div>
+                  <div style={{ color: 'var(--text-muted)' }}>Conflicts</div>
+                  <div style={{ color: r?.conflicts?.length ? 'var(--danger)' : 'inherit' }}>{r?.conflicts?.length ?? '-'}</div>
                 </div>
               </div>
             </div>
@@ -356,7 +366,7 @@ async function walkAndCollect(fs: any, root: string, prefix: string, results: st
         // Check if it's a directory that might contain matching files
         try {
           const stat = await fs.stat(fullPath);
-          if (typeof stat.isDirectory === 'function' && stat.isDirectory()) {
+          if (stat.mode !== undefined && (stat.mode & 0o40000) === 0o40000) {
             await visit(fullPath);
           }
         } catch { /* ignore */ }
@@ -364,9 +374,9 @@ async function walkAndCollect(fs: any, root: string, prefix: string, results: st
       }
       try {
         const stat = await fs.stat(fullPath);
-        if (typeof stat.isDirectory === 'function' && stat.isDirectory()) {
+        if (stat.mode !== undefined && (stat.mode & 0o40000) === 0o40000) {
           await visit(fullPath);
-        } else if (typeof stat.isFile === 'function' ? stat.isFile() : !stat.isDirectory) {
+        } else {
           results.push(relPath);
         }
       } catch { /* stat failed */ }
