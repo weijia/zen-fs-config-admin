@@ -21,12 +21,8 @@ async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
         // isFile/isDirectory function properties, causing directories to
         // appear as files on cache hit. Always verify with readdir.
         let isDir: boolean;
-        if (typeof stat.isDirectory === 'function') {
-          isDir = stat.isDirectory();
-          // Even if stat says file, double-check — the cached value may be wrong
-          if (!isDir) {
-            try { await fs.readdir(fullPath); isDir = true; } catch { /* truly a file */ }
-          }
+        if (stat.mode !== undefined && (stat.mode & 0o40000) === 0o40000) {
+          isDir = true;
         } else {
           try { await fs.readdir(fullPath); isDir = true; } catch { isDir = false; }
         }
@@ -109,14 +105,13 @@ export default function FilesPage() {
   useEffect(() => {
     if (!repo || !effectivePath) return;
     repo.rootFS.promises.stat(effectivePath).then(async (s: any) => {
-      let isFile = typeof s.isFile === 'function' ? s.isFile() : !(typeof s.isDirectory === 'function' ? s.isDirectory() : s.isDirectory);
+      let isFile = !(s.mode !== undefined && (s.mode & 0o40000) === 0o40000);
       if (!isFile) {
-        // stat might wrongly say "not a file" due to cache — verify
         try {
           await repo.rootFS.promises.readdir(effectivePath);
-          isFile = false; // confirmed directory
+          isFile = false;
         } catch {
-          // readdir failed, trust stat
+          isFile = true;
         }
       }
       if (isFile) {
@@ -206,6 +201,45 @@ export default function FilesPage() {
     }
   };
 
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const handleDelete = async () => {
+    if (!repo || !effectivePath || effectivePath === '/') return;
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      setTimeout(() => setConfirmDelete(false), 3000);
+      return;
+    }
+    setDeleting(true);
+    setMessage('');
+    try {
+      let isFile = true;
+      try {
+        const s = await repo.rootFS.promises.stat(effectivePath);
+        if (s.mode !== undefined && (s.mode & 0o40000) === 0o40000) isFile = false;
+      } catch { /* stat failed */ }
+
+      if (isFile) {
+        await repo.rootFS.promises.unlink(effectivePath);
+      } else {
+        await repo.rootFS.promises.rmdir(effectivePath);
+      }
+      setMessage('Deleted');
+      setContent('');
+      setOriginalContent('');
+      setSelectedPath('');
+      navigate('/files');
+      refreshTree();
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setDeleting(false);
+      setConfirmDelete(false);
+      setTimeout(() => setMessage(''), 3000);
+    }
+  };
+
   if (!repo) return <div className="loading">No repo connected</div>;
 
   const hasChanges = content !== originalContent;
@@ -227,6 +261,16 @@ export default function FilesPage() {
               {hasChanges && (
                 <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>
                   {saving ? 'Saving...' : 'Save'}
+                </button>
+              )}
+              {effectivePath && effectivePath !== '/' && (
+                <button
+                  className="btn btn-sm btn-danger"
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  style={{ marginLeft: 'auto', marginRight: 8 }}
+                >
+                  {confirmDelete ? 'Confirm Delete?' : 'Delete'}
                 </button>
               )}
               {versionInfo && (
