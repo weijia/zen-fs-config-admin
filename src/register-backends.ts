@@ -262,7 +262,11 @@ registerBackend('WebDAV', async (options) => {
       if (!res.ok) throw new Error(`ENOENT: ${path}`);
       const items = await parseMultiStatus(res);
       const item = items[0];
-      return { isFile: () => !item.isDir, isDirectory: () => item.isDir, size: item.size };
+      return {
+        mode: item.isDir ? 0o040755 : 0o100644,
+        size: item.size,
+        mtimeMs: 0,
+      };
     },
     async exists(path: string): Promise<boolean> {
       return exists(path);
@@ -332,14 +336,7 @@ registerBackend('RemoteStorage', async (options) => {
       return fsAny.readdir(path);
     },
     async stat(path: string, ..._args: any[]): Promise<any> {
-      const st = await fsAny.stat(path);
-      const stAny = st as any;
-      return {
-        isFile: () => typeof stAny.isFile === 'function' ? stAny.isFile() : !stAny.isDirectory,
-        isDirectory: () => typeof stAny.isDirectory === 'function' ? stAny.isDirectory() : !!stAny.isDirectory,
-        size: st.size,
-        mtime: stAny.mtimeMs ?? stAny.mtime ?? 0,
-      };
+      return fsAny.stat(path);
     },
     async exists(path: string): Promise<boolean> {
       return fsAny.exists(path);
