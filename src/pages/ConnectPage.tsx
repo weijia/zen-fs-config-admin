@@ -150,17 +150,6 @@ export default function ConnectPage() {
 
         <div style={{ borderTop: '1px solid var(--border)', margin: '16px 0' }} />
 
-        <div className="form-group">
-          <label className="form-label">App ID</label>
-          <input className="form-input" value={appId} onChange={e => setAppId(e.target.value)} placeholder="admin" />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Cache TTL (ms)</label>
-          <input className="form-input" type="number" value={cacheTtl} onChange={e => setCacheTtl(e.target.value)} />
-          <p className="form-hint">0 = always revalidate, 60000 = 60s cache</p>
-        </div>
-
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <label className="form-label" style={{ margin: 0 }}>Backends</label>
           <button className="btn btn-sm btn-secondary" onClick={addBackend}>+ Add Backend</button>
@@ -226,6 +215,17 @@ export default function ConnectPage() {
             {localError || error}
           </div>
         )}
+
+        <div className="form-group">
+          <label className="form-label">App ID</label>
+          <input className="form-input" value={appId} onChange={e => setAppId(e.target.value)} placeholder="admin" />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Cache TTL (ms)</label>
+          <input className="form-input" type="number" value={cacheTtl} onChange={e => setCacheTtl(e.target.value)} />
+          <p className="form-hint">0 = always revalidate, 60000 = 60s cache</p>
+        </div>
 
         <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '10px', marginTop: 8 }} disabled={connecting} onClick={handleConnect}>
           {connecting ? 'Connecting...' : 'Connect'}
