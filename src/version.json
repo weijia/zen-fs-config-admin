@@ -1,9 +1,9 @@
 {
-  "version": "v0.3.23",
-  "buildTime": "2026/07/23 15:34:05",
-  "sha": "0c16028",
+  "version": "main-31bb40f",
+  "buildTime": "2026/07/23 19:01:28",
+  "sha": "31bb40f",
   "branch": "main",
-  "tag": "v0.3.23",
+  "tag": "",
   "deps": {
     "zen-fs-config": "0.3.28",
     "zen-fs-sync": "0.2.4",

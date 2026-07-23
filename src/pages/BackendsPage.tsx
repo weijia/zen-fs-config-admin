@@ -127,12 +127,22 @@ export default function BackendsPage() {
     const meta: BackendsMeta = { version: 1, backends: updated };
     await repo.updateBackends(meta);
 
-    // Immediately sync .meta/ to all replicas so topology propagates
-    await repo.syncMetaToReplicas();
+    // Close modal immediately after save succeeds
+    setEditing(null);
+    setIsNew(false);
+    setMessage('Saved, reconnecting...');
+    setTimeout(() => setMessage(''), 3000);
 
-    setEditing(null); setIsNew(false); setMessage('Saved, reconnecting...'); setTimeout(() => setMessage(''), 2000);
+    // Sync and reconnect — don't let failures keep the modal open
+    try { await repo.syncMetaToReplicas(); } catch (err: any) {
+      console.warn('[BackendsPage] syncMetaToReplicas failed:', err?.message);
+    }
     await loadBackends();
-    await reconnect();
+    try { await reconnect(); } catch (err: any) {
+      console.warn('[BackendsPage] reconnect failed:', err?.message);
+      setMessage(`Saved, but reconnect failed: ${err?.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    }
   };
 
   const handleRemove = async (id: string) => {
