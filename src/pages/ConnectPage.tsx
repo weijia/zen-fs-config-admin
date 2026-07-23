@@ -58,8 +58,8 @@ export default function ConnectPage() {
     const id = `backend-${Date.now()}`;
     setBackends([...backends, {
       id,
-      type: 'IndexedDB',
-      options: { ...getBackendTypeDef('IndexedDB')!.defaultOptions },
+      type: 'GitHub',
+      options: { ...getBackendTypeDef('GitHub')!.defaultOptions },
       isPrimary: false,
     }]);
   };

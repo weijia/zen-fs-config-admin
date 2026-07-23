@@ -35,9 +35,9 @@ export default function BackendsPage() {
     setIsNew(true);
     setImportStr('');
     setImportError('');
-    const def = getBackendTypeDef('IndexedDB')!;
+    const def = getBackendTypeDef('GitHub')!;
     const autoId = `${def.type.toLowerCase()}-${Date.now()}`;
-    setFormState({ id: autoId, type: 'IndexedDB', options: { ...def.defaultOptions }, description: '' });
+    setFormState({ id: autoId, type: 'GitHub', options: { ...def.defaultOptions }, description: '' });
   };
 
   const changeType = (type: string) => {

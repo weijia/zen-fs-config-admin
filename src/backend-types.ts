@@ -17,25 +17,6 @@ export interface BackendTypeDef {
 
 export const BACKEND_TYPES: BackendTypeDef[] = [
   {
-    type: 'IndexedDB',
-    label: 'IndexedDB',
-    icon: '\u{1F5C4}\u{FE0F}',
-    fields: [{ key: 'storeName', label: 'Store Name', type: 'text', placeholder: 'zen-fs-config' }],
-    defaultOptions: { storeName: 'zen-fs-config' },
-  },
-  {
-    type: 'WebStorage',
-    label: 'WebStorage (localStorage)',
-    icon: '\u{1F4C2}',
-    fields: [
-      { key: 'storageType', label: 'Storage Type', type: 'select', options: [
-        { value: 'localStorage', label: 'localStorage (persistent)' },
-        { value: 'sessionStorage', label: 'sessionStorage (tab-scoped)' },
-      ]},
-    ],
-    defaultOptions: { storageType: 'localStorage' },
-  },
-  {
     type: 'InMemory',
     label: 'Memory (Volatile)',
     icon: '\u{1F4BE}',
