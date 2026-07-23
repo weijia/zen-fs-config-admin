@@ -18,9 +18,9 @@
     "react-router-dom": "^7.18.1",
     "zen-fs-cache": "^1.0.1",
     "zen-fs-config": "^0.3.30",
-    "zen-fs-gitee": "^1.1.0",
+    "zen-fs-gitee": "^1.1.4",
     "zen-fs-github": "github:weijia/zen-fs-github#main",
-    "zen-fs-remotestoragejs": "^1.2.13",
+    "zen-fs-remotestoragejs": "^1.2.14",
     "zen-fs-sync": "^0.2.4"
   },
   "devDependencies": {
