@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 
@@ -6,10 +6,15 @@ interface TreeNode {
   name: string;
   path: string;
   isDir: boolean;
+  loaded: boolean;   // whether children have been loaded
   children: TreeNode[];
 }
 
-async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
+/**
+ * Load children of a directory. Only does one level — no recursion.
+ * Uses mode bits to detect directories; no fallback readdir.
+ */
+async function loadChildren(fs: any, dir: string): Promise<TreeNode[]> {
   const entries: TreeNode[] = [];
   try {
     const items = await fs.readdir(dir);
@@ -17,26 +22,20 @@ async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
       const fullPath = dir === '/' ? `/${item}` : `${dir}/${item}`;
       try {
         const stat = await fs.stat(fullPath);
-        // CachedFileSystem.stat uses JSON.stringify which silently drops
-        // isFile/isDirectory function properties, causing directories to
-        // appear as files on cache hit. Always verify with readdir.
-        let isDir: boolean;
-        if (stat.mode !== undefined && (stat.mode & 0o40000) === 0o40000) {
-          isDir = true;
-        } else {
-          try { await fs.readdir(fullPath); isDir = true; } catch { isDir = false; }
-        }
-        const node: TreeNode = { name: item, path: fullPath, isDir, children: [] };
-        if (node.isDir) {
-          node.children = await buildTree(fs, fullPath, depth + 1);
-        }
-        entries.push(node);
+        const isDir = stat.mode !== undefined && (stat.mode & 0o40000) === 0o40000;
+        entries.push({
+          name: item,
+          path: fullPath,
+          isDir,
+          loaded: !isDir,   // files are pre-loaded (no children), dirs need expansion
+          children: [],
+        });
       } catch {
-        // stat failed for this entry, skip
+        // stat failed, skip
       }
     }
   } catch {
-    // readdir failed for this directory
+    // readdir failed
   }
   return entries.sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
@@ -44,29 +43,78 @@ async function buildTree(fs: any, dir: string, depth = 0): Promise<TreeNode[]> {
   });
 }
 
-function TreeView({ nodes, selected, onSelect }: {
-  nodes: TreeNode[];
+function FileTree({ rootNodes, fs, selected, onSelect }: {
+  rootNodes: TreeNode[];
+  fs: any;
   selected: string;
   onSelect: (path: string) => void;
 }) {
   return (
     <div className="file-tree">
-      {nodes.map(n => (
-        <div key={n.path}>
-          <div
-            className={`tree-item ${n.isDir ? 'directory' : ''} ${selected === n.path ? 'active' : ''}`}
-            onClick={() => n.isDir ? onSelect(n.path) : onSelect(n.path)}
-          >
-            <span>{n.isDir ? '📁' : '📄'}</span>
-            <span>{n.name}</span>
-          </div>
-          {n.isDir && n.children.length > 0 && (
-            <div className="tree-children">
-              <TreeView nodes={n.children} selected={selected} onSelect={onSelect} />
-            </div>
-          )}
-        </div>
+      {rootNodes.map(n => (
+        <TreeNodeView key={n.path} node={n} fs={fs} selected={selected} onSelect={onSelect} depth={0} />
       ))}
+    </div>
+  );
+}
+
+function TreeNodeView({ node, fs, selected, onSelect, depth }: {
+  node: TreeNode;
+  fs: any;
+  selected: string;
+  onSelect: (path: string) => void;
+  depth: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [children, setChildren] = useState<TreeNode[]>(node.children);
+
+  const handleClick = async () => {
+    if (!node.isDir) {
+      onSelect(node.path);
+      return;
+    }
+    // Toggle expand
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    // Load children if not yet loaded
+    if (!node.loaded) {
+      setLoading(true);
+      try {
+        const loaded = await loadChildren(fs, node.path);
+        node.children = loaded;
+        node.loaded = true;
+        setChildren(loaded);
+      } finally {
+        setLoading(false);
+      }
+    }
+    setExpanded(true);
+    onSelect(node.path);
+  };
+
+  return (
+    <div>
+      <div
+        className={`tree-item ${node.isDir ? 'directory' : ''} ${selected === node.path ? 'active' : ''}`}
+        onClick={handleClick}
+        style={{ cursor: 'pointer' }}
+      >
+        <span style={{ width: 20, display: 'inline-block', textAlign: 'center' }}>
+          {loading ? '⟳' : node.isDir ? (expanded ? '▼' : '▶') : ''}
+        </span>
+        <span style={{ marginRight: 4 }}>{node.isDir ? '📁' : '📄'}</span>
+        <span>{node.name}</span>
+      </div>
+      {expanded && children.length > 0 && (
+        <div className="tree-children">
+          {children.map(c => (
+            <TreeNodeView key={c.path} node={c} fs={fs} selected={selected} onSelect={onSelect} depth={depth + 1} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -75,52 +123,38 @@ export default function FilesPage() {
   const { repo } = useConfigRepo();
   const params = useParams();
   const navigate = useNavigate();
-  const [tree, setTree] = useState<TreeNode[]>([]);
+  const [rootNodes, setRootNodes] = useState<TreeNode[]>([]);
   const [selectedPath, setSelectedPath] = useState('');
   const [content, setContent] = useState('');
   const [originalContent, setOriginalContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [versionInfo, setVersionInfo] = useState<any>(null);
-  const [expanded, setExpanded] = useState(new Set<string>());
   const [loading, setLoading] = useState(false);
+  const fsRef = useRef<any>(null);
 
-  const refreshTree = useCallback(async () => {
+  // Load root level once
+  useEffect(() => {
     if (!repo) return;
+    fsRef.current = repo.rootFS.promises;
     setLoading(true);
-    try {
-      const rootNodes = await buildTree(repo.rootFS.promises, '/');
-      setTree(rootNodes);
-    } catch (err: any) {
-      console.error('[FilesPage] refreshTree error:', err);
-    } finally {
-      setLoading(false);
-    }
+    loadChildren(repo.rootFS.promises, '/')
+      .then(nodes => setRootNodes(nodes))
+      .finally(() => setLoading(false));
   }, [repo]);
-
-  useEffect(() => { refreshTree(); }, [refreshTree]);
 
   const effectivePath = (params['*'] ? `/${params['*']}` : selectedPath) || '';
 
   useEffect(() => {
     if (!repo || !effectivePath) return;
-    repo.rootFS.promises.stat(effectivePath).then(async (s: any) => {
-      let isFile = !(s.mode !== undefined && (s.mode & 0o40000) === 0o40000);
-      if (!isFile) {
-        try {
-          await repo.rootFS.promises.readdir(effectivePath);
-          isFile = false;
-        } catch {
-          isFile = true;
-        }
-      }
-      if (isFile) {
-        return repo.rootFS.promises.readFile(effectivePath, 'utf-8');
+    const fs = repo.rootFS.promises;
+    fs.stat(effectivePath).then(async (s: any) => {
+      const isDir = s.mode !== undefined && (s.mode & 0o40000) === 0o40000;
+      if (!isDir) {
+        return fs.readFile(effectivePath, 'utf-8');
       }
       return null;
     }).then((text: string | null) => {
-      // CachedFileSystem drops the encoding parameter, so the backend may return
-      // Uint8Array instead of a decoded string. Decode defensively.
       const decoded = text != null
         ? (typeof text === 'string' ? text : new TextDecoder().decode(text as Uint8Array))
         : null;
@@ -141,7 +175,7 @@ export default function FilesPage() {
     // Load version info
     import('zen-fs-config').then(({ versionPathFor }) => {
       const vp = versionPathFor(effectivePath);
-      repo.rootFS.promises.readFile(vp, 'utf-8').then((v: any) => {
+      fs.readFile(vp, 'utf-8').then((v: any) => {
         const str = typeof v === 'string' ? v : new TextDecoder().decode(v as Uint8Array);
         setVersionInfo(JSON.parse(str));
       }).catch(() => setVersionInfo(null));
@@ -149,13 +183,6 @@ export default function FilesPage() {
   }, [repo, effectivePath]);
 
   const handleSelect = (path: string) => {
-    if (expanded.has(path)) {
-      expanded.delete(path);
-    } else {
-      expanded.add(path);
-    }
-    setExpanded(new Set(expanded));
-    // Navigate to file path
     const relative = path.startsWith('/') ? path.slice(1) : path;
     navigate(`/files/${relative}`);
   };
@@ -164,11 +191,10 @@ export default function FilesPage() {
 
   const handleSave = async () => {
     if (!repo || !effectivePath) return;
+    const fs = repo.rootFS.promises;
     setSaving(true);
     setMessage('');
     try {
-      // For .meta/ and other non-app files, write directly via rootFS.
-      // For app config files (under /<appId>/), use setConfig for versioning.
       const appId = repo.appId;
       const isInAppDir = effectivePath.startsWith(`/${appId}/`);
       if (isInAppDir) {
@@ -176,13 +202,11 @@ export default function FilesPage() {
         if (isJson) data = JSON.parse(content);
         repo.setConfig(effectivePath.slice(`/${appId}`.length), data);
       } else {
-        // Direct write (e.g. /.meta/backends.json, /shared/xxx)
         const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
-        await repo.rootFS.promises.writeFile(effectivePath, data);
+        await fs.writeFile(effectivePath, data);
       }
       setMessage('Saved');
       setOriginalContent(content);
-      refreshTree();
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
     } finally {
@@ -214,14 +238,12 @@ export default function FilesPage() {
     setDeleting(true);
     setMessage('');
     try {
-      // Use repo.deleteFile() which writes a tombstone for cross-backend sync
       await repo.deleteFile(effectivePath);
       setMessage('Deleted');
       setContent('');
       setOriginalContent('');
       setSelectedPath('');
       navigate('/files');
-      refreshTree();
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
     } finally {
@@ -239,7 +261,10 @@ export default function FilesPage() {
     <div className="split-pane">
       <div className="split-pane-left">
         {loading && <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 12 }}>Loading...</div>}
-        <TreeView nodes={tree} selected={selectedPath} onSelect={handleSelect} />
+        {!loading && rootNodes.length === 0 && (
+          <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 13 }}>No files</div>
+        )}
+        <FileTree rootNodes={rootNodes} fs={fsRef.current} selected={selectedPath} onSelect={handleSelect} />
       </div>
       <div className="split-pane-right">
         {effectivePath ? (
