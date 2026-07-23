@@ -130,7 +130,7 @@ export default function BackendsPage() {
     // Immediately sync .meta/ to all replicas so topology propagates
     await repo.syncMetaToReplicas();
 
-    setEditing(null); setMessage('Saved, reconnecting...'); setTimeout(() => setMessage(''), 2000);
+    setEditing(null); setIsNew(false); setMessage('Saved, reconnecting...'); setTimeout(() => setMessage(''), 2000);
     await loadBackends();
     await reconnect();
   };
