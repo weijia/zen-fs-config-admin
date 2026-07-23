@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import type { ConfigRepoOptions } from 'zen-fs-config';
 import { BACKEND_TYPES, getBackendTypeDef } from '../backend-types';
+import { deserializeBackend } from '../backend-config-string';
 import { versionDisplay, buildTimeDisplay } from '../version';
 
 interface BackendEntry {
@@ -19,9 +20,39 @@ export default function ConnectPage() {
   const [appId, setAppId] = useState('admin');
   const [cacheTtl, setCacheTtl] = useState('60000');
   const [localError, setLocalError] = useState('');
+  const [configString, setConfigString] = useState('');
+
+  // Default to GitHub as primary backend
   const [backends, setBackends] = useState<BackendEntry[]>([
-    { id: 'admin-primary', type: 'IndexedDB', options: { storeName: 'zen-fs-config' }, isPrimary: true },
+    { id: 'admin-primary', type: 'GitHub', options: { ...getBackendTypeDef('GitHub')!.defaultOptions }, isPrimary: true },
   ]);
+
+  // Real-time parse of config string — updates primary backend live
+  const parsedResult = useMemo(() => {
+    const parsed = deserializeBackend(configString);
+    if (!parsed) return null;
+    return parsed;
+  }, [configString]);
+
+  const parseError = useMemo(() => {
+    if (!configString.trim()) return '';
+    if (!parsedResult) return 'Invalid format. Expected: type:id:key=value,key=value';
+    return '';
+  }, [configString, parsedResult]);
+
+  // Apply parsed config to primary backend in real-time
+  useEffect(() => {
+    if (!parsedResult) return;
+    setBackends(prev => prev.map(b => {
+      if (!b.isPrimary) return b;
+      return {
+        ...b,
+        type: parsedResult.type,
+        id: parsedResult.id,
+        options: { ...(parsedResult.options ?? {}) },
+      };
+    }));
+  }, [parsedResult]);
 
   const addBackend = () => {
     const id = `backend-${Date.now()}`;
@@ -41,7 +72,6 @@ export default function ConnectPage() {
     } else {
       next[index] = { ...next[index], ...updates };
     }
-    // Handle set primary flag from options
     if ((next[index].options as any)?._setPrimary === 'true') {
       next.forEach((b, i) => { b.isPrimary = i === index; });
       delete (next[index].options as any)._setPrimary;
@@ -90,9 +120,35 @@ export default function ConnectPage() {
 
   return (
     <div className="connect-page">
-      <div className="connect-card" style={{ maxWidth: 640 }}>
+      <div className="connect-card" style={{ maxWidth: 680 }}>
         <h1>zen-fs-config-admin</h1>
         <p className="subtitle">Configure backends and connect</p>
+
+        {/* Config string input — real-time parse */}
+        <div className="form-group">
+          <label className="form-label">Config String (optional)</label>
+          <input
+            className="form-input"
+            value={configString}
+            onChange={e => setConfigString(e.target.value)}
+            placeholder="type:id:key=value,key=value"
+            style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+          />
+          <p className="form-hint">
+            Paste a config string to auto-fill the primary backend. Format: <code>type:id:key=value,key=value</code>
+            <br />Example: <code>GitHub:my-repo:owner=weijia,repo=zen-fs-config,branch=main</code>
+          </p>
+          {parseError && (
+            <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 4 }}>{parseError}</div>
+          )}
+          {parsedResult && (
+            <div style={{ color: 'var(--success)', fontSize: 12, marginTop: 4 }}>
+              Parsed: {parsedResult.type} / {parsedResult.id} — fields updated below
+            </div>
+          )}
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--border)', margin: '16px 0' }} />
 
         <div className="form-group">
           <label className="form-label">App ID</label>
@@ -141,13 +197,23 @@ export default function ConnectPage() {
                 {def?.fields.map(field => (
                   <div key={field.key} className="form-group" style={{ margin: 0 }}>
                     <label className="form-label">{field.label} {field.required && <span style={{ color: 'var(--danger)' }}>*</span>}</label>
-                    <input
-                      className="form-input"
-                      type={field.type}
-                      value={entry.options[field.key] ?? ''}
-                      onChange={e => updateBackend(index, { options: { ...entry.options, [field.key]: e.target.value } })}
-                      placeholder={field.placeholder}
-                    />
+                    {field.type === 'select' ? (
+                      <select
+                        className="form-input"
+                        value={entry.options[field.key] ?? ''}
+                        onChange={e => updateBackend(index, { options: { ...entry.options, [field.key]: e.target.value } })}
+                      >
+                        {field.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    ) : (
+                      <input
+                        className="form-input"
+                        type={field.type}
+                        value={entry.options[field.key] ?? ''}
+                        onChange={e => updateBackend(index, { options: { ...entry.options, [field.key]: e.target.value } })}
+                        placeholder={field.placeholder}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
