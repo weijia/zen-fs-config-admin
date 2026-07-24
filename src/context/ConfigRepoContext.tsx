@@ -1,27 +1,26 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
-import { createConfigRepo, type IConfigRepo, type ConfigRepoOptions } from 'zen-fs-config';
+import { createConfigRepo, type IConfigRepo } from 'zen-fs-config';
 import { setDebug } from 'zen-fs-sync';
 import { versionDisplay, buildTimeDisplay } from '../version';
 // Register all backend types (IndexedDB, WebStorage, GitHub, Gitee, WebDAV, RemoteStorage, ...)
 // This must be imported BEFORE createConfigRepo() is called.
 import '../register-backends';
 
-const STORAGE_KEY = 'zen-fs-config-admin:connect-params';
+const NODE_ID_STORAGE_KEY = 'zen-fs-config-admin:node-id';
+const APP_ID = 'admin';
+const CACHE_TTL_MS = 60000;
 
-function saveConnectParams(appId: string, options: ConfigRepoOptions) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ appId, options })); } catch { /* ignore */ }
-}
-
-function loadConnectParams(): { appId: string; options: ConfigRepoOptions } | null {
+function getOrCreateNodeId(): string {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch { return null; }
-}
-
-function clearConnectParams() {
-  try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    let nodeId = localStorage.getItem(NODE_ID_STORAGE_KEY);
+    if (!nodeId) {
+      nodeId = `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      localStorage.setItem(NODE_ID_STORAGE_KEY, nodeId);
+    }
+    return nodeId;
+  } catch {
+    return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
 }
 
 interface ConfigRepoContextValue {
@@ -31,9 +30,6 @@ interface ConfigRepoContextValue {
   reconnecting: boolean;
   error: string | null;
   primaryBackendId: string | null;
-  connect: (appId: string, options: ConfigRepoOptions) => Promise<void>;
-  disconnect: () => Promise<void>;
-  /** Dispose old repo, create new one, sync once. Safe to call while UI is active. */
   reconnect: () => Promise<void>;
 }
 
@@ -44,8 +40,6 @@ const Context = createContext<ConfigRepoContextValue>({
   reconnecting: false,
   error: null,
   primaryBackendId: null,
-  connect: async () => {},
-  disconnect: async () => {},
   reconnect: async () => {},
 });
 
@@ -92,68 +86,60 @@ async function syncOnceAndStop(repo: IConfigRepo) {
   }
 }
 
+async function createRepo(): Promise<IConfigRepo> {
+  const nodeId = getOrCreateNodeId();
+  return createConfigRepo(APP_ID, {
+    nodeId,
+    cache: { storeType: 'MemoryCacheStore', ttlMs: CACHE_TTL_MS },
+  });
+}
+
 export function ConfigRepoProvider({ children }: { children: ReactNode }) {
   const [repo, setRepo] = useState<IConfigRepo | null>(null);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // primaryBackendId is always 'local-idb' in the new architecture
   const [primaryBackendId] = useState<string | null>('local-idb');
-  const connectParamsRef = useRef<{ appId: string; options: ConfigRepoOptions } | null>(null);
   /** Ref to the current repo so reconnect can safely dispose it even after a React re-render. */
   const repoRef = useRef<IConfigRepo | null>(null);
 
-  const doConnect = useCallback(async (appId: string, options: ConfigRepoOptions) => {
+  // Auto-connect on mount
+  useEffect(() => {
+    let cancelled = false;
     setConnecting(true);
     setError(null);
-    try {
-      const r = await createConfigRepo(appId, options);
-      connectParamsRef.current = { appId, options };
-      saveConnectParams(appId, options);
-      repoRef.current = r;
-      setRepo(r);
-      setConnected(true);
-      await syncOnceAndStop(r);
-      console.log('[version] connected:', versionDisplay, '| build:', buildTimeDisplay);
-    } catch (err: any) {
-      setError(err.message || String(err));
-      throw err;
-    } finally {
-      setConnecting(false);
-    }
-  }, []);
-
-  const connect = useCallback(async (appId: string, options: ConfigRepoOptions) => {
-    await doConnect(appId, options);
-  }, [doConnect]);
-
-  const disconnect = useCallback(async () => {
-    const oldRepo = repoRef.current;
-    repoRef.current = null;
-    setRepo(null);
-    setConnected(false);
-    setError(null);
-    connectParamsRef.current = null;
-    clearConnectParams();
-    // Dispose AFTER clearing state so UI never sees a disposed repo
-    try { if (oldRepo) await oldRepo.dispose(); } catch { /* already disposed */ }
+    createRepo()
+      .then(async r => {
+        if (cancelled) { try { await r.dispose(); } catch { /* ignore */ } return; }
+        repoRef.current = r;
+        setRepo(r);
+        setConnected(true);
+        await syncOnceAndStop(r);
+        console.log('[version] connected:', versionDisplay, '| build:', buildTimeDisplay);
+      })
+      .catch(err => {
+        if (!cancelled) {
+          console.error('[version] auto-connect failed:', err);
+          setError(err.message || String(err));
+        }
+      })
+      .finally(() => { if (!cancelled) setConnecting(false); });
+    return () => { cancelled = true; };
   }, []);
 
   const reconnect = useCallback(async () => {
-    const params = connectParamsRef.current;
-    if (!params) return;
     setReconnecting(true);
+    setError(null);
     try {
-      // Create new repo FIRST, then swap and dispose old
-      const newRepo = await createConfigRepo(params.appId, params.options);
+      const newRepo = await createRepo();
 
-      // Swap refs atomically — UI immediately sees the new (non-disposed) repo
+      // Swap refs atomically
       const oldRepo = repoRef.current;
       repoRef.current = newRepo;
       setRepo(newRepo);
 
-      // Dispose old repo AFTER swap (best-effort, errors ignored)
+      // Dispose old repo AFTER swap
       try { if (oldRepo) await oldRepo.dispose(); } catch { /* already disposed */ }
 
       await syncOnceAndStop(newRepo);
@@ -163,31 +149,10 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
     } finally {
       setReconnecting(false);
     }
-  }, []); // no repo dependency — uses repoRef instead
-
-  // Auto-reconnect on page refresh
-  useEffect(() => {
-    const saved = loadConnectParams();
-    if (!saved) return;
-    setConnecting(true);
-    createConfigRepo(saved.appId, saved.options)
-      .then(async r => {
-        connectParamsRef.current = saved;
-        repoRef.current = r;
-        setRepo(r);
-        setConnected(true);
-        await syncOnceAndStop(r);
-        console.log('[version] auto-reconnected:', versionDisplay, '| build:', buildTimeDisplay);
-      })
-      .catch(err => {
-        console.error('[version] auto-reconnect failed:', err);
-        clearConnectParams();
-      })
-      .finally(() => setConnecting(false));
   }, []);
 
   return (
-    <Context.Provider value={{ repo, connected, connecting, reconnecting, error, primaryBackendId, connect, disconnect, reconnect }}>
+    <Context.Provider value={{ repo, connected, connecting, reconnecting, error, primaryBackendId, reconnect }}>
       {children}
     </Context.Provider>
   );

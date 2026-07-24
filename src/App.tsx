@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigRepoProvider, useConfigRepo } from './context/ConfigRepoContext';
 import Layout from './components/Layout';
 import UpdateToast from './components/UpdateToast';
-import ConnectPage from './pages/ConnectPage';
 import DashboardPage from './pages/DashboardPage';
 import FilesPage from './pages/FilesPage';
 import BackendsPage from './pages/BackendsPage';
@@ -15,8 +14,8 @@ function AppRoutes() {
   if (!connected) {
     return (
       <Routes>
-        <Route path="/connect" element={<ConnectPage />} />
-        <Route path="*" element={<Navigate to="/connect" replace />} />
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     );
   }
@@ -30,7 +29,6 @@ function AppRoutes() {
         <Route path="/backends" element={<BackendsPage />} />
         <Route path="/conflicts" element={<ConflictsPage />} />
         <Route path="/nodes" element={<NodesPage />} />
-        <Route path="/connect" element={<Navigate to="/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>

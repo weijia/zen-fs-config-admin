@@ -1,24 +1,18 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import { versionDisplay, buildTimeDisplay } from '../version';
 import '../styles/global.css';
 
 const navItems = [
-  { to: '/dashboard', label: 'Dashboard', icon: '◈' },
-  { to: '/files', label: 'Files', icon: '▣' },
-  { to: '/backends', label: 'Backends', icon: '◆' },
-  { to: '/conflicts', label: 'Conflicts', icon: '⚠' },
-  { to: '/nodes', label: 'Nodes', icon: '◉' },
+  { to: '/dashboard', label: 'Dashboard', icon: '\u25C8' },
+  { to: '/files', label: 'Files', icon: '\u25A3' },
+  { to: '/backends', label: 'Backends', icon: '\u25C6' },
+  { to: '/conflicts', label: 'Conflicts', icon: '\u26A0' },
+  { to: '/nodes', label: 'Nodes', icon: '\u25C9' },
 ];
 
 export default function Layout() {
-  const { repo, connected, disconnect } = useConfigRepo();
-  const navigate = useNavigate();
-
-  const handleDisconnect = async () => {
-    await disconnect();
-    navigate('/connect');
-  };
+  const { repo, connected, reconnect, reconnecting } = useConfigRepo();
 
   const statuses = repo ? repo.getSyncStatuses() : new Map();
   const anyWatching = Array.from(statuses.values()).some(s => s.watching);
@@ -38,8 +32,12 @@ export default function Layout() {
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                 node: {repo.nodeId.slice(0, 16)}
               </span>
-              <button className="btn btn-sm btn-secondary" onClick={handleDisconnect}>
-                Disconnect
+              <button
+                className="btn btn-sm btn-secondary"
+                onClick={reconnect}
+                disabled={reconnecting}
+              >
+                {reconnecting ? 'Reconnecting...' : 'Reconnect'}
               </button>
             </>
           )}
