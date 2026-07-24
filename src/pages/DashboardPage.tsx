@@ -273,6 +273,8 @@ export default function DashboardPage() {
         {pairs.map(([id, s]) => {
           const r = s.lastResult;
           const hasActivity = r && (r.filesCreated || r.filesUpdated || r.filesDeleted || r.conflicts?.length || 0) > 0;
+          const srcName = (s as any).sourceName || 'source';
+          const tgtName = (s as any).targetName || 'target';
           const statusColor = s.state === 'syncing' ? 'var(--warning)'
             : !r ? 'var(--text-muted)'
             : r.filesSkipped > 0 ? 'var(--warning)'
@@ -285,10 +287,14 @@ export default function DashboardPage() {
             <div key={id} style={{ marginBottom: 16, padding: 12, background: 'var(--bg-secondary)', borderRadius: 6, borderLeft: `3px solid ${statusColor}`, border: hasActivity ? '1px solid var(--warning)' : undefined }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <div>
-                  <span className="badge badge-primary">{id}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600 }}>
+                    {srcName} → {tgtName}
+                  </span>
+                  <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                    [{id}]
+                  </span>
                   <span style={{ marginLeft: 8, fontSize: 12, color: statusColor, fontWeight: 600 }}>
                     {statusText}
-                    {r ? ` | dir: ${r.direction}` : ''}
                   </span>
                   {s.watching && <span className="badge" style={{ marginLeft: 8, background: 'var(--info)', color: '#fff' }}>watch</span>}
                 </div>
