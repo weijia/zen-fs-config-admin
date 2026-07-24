@@ -351,12 +351,17 @@ export default function DashboardPage() {
                   <div style={{ color: 'var(--text-muted)', marginBottom: 4 }}>
                     Changes ({r.changes.length}):
                   </div>
-                  <div style={{ fontFamily: 'var(--font-mono)', maxHeight: 120, overflow: 'auto' }}>
+                  <div style={{ fontFamily: 'var(--font-mono)', maxHeight: 180, overflow: 'auto' }}>
                     {r.changes.map((c: any, j: number) => {
                       const color = c.type === 'Created' ? 'var(--success)' : c.type === 'Modified' ? 'var(--warning)' : 'var(--danger)';
+                      const snap = c.type === 'Created' ? c.sourceSnapshot : c.type === 'Modified' ? c.sourceSnapshot : c.targetSnapshot;
+                      const mtime = snap?.mtimeMs ? new Date(snap.mtimeMs).toLocaleString() : '';
+                      const size = snap?.size != null ? `${snap.size}B` : '';
                       return (
-                        <div key={j} style={{ color }}>
-                          {c.type}: {c.path}
+                        <div key={j} style={{ color, marginBottom: 2 }}>
+                          <span style={{ fontWeight: 600 }}>{c.type}</span>: {c.path}
+                          {size && <span style={{ color: 'var(--text-muted)' }}> ({size})</span>}
+                          {mtime && <span style={{ color: 'var(--text-muted)' }}> — {mtime}</span>}
                         </div>
                       );
                     })}
