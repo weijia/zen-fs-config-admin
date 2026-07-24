@@ -1,11 +1,11 @@
 {
-  "version": "main-fb2497c",
-  "buildTime": "2026/07/25 06:28:17",
-  "sha": "fb2497c",
+  "version": "main-e27a2a0",
+  "buildTime": "2026/07/25 06:56:31",
+  "sha": "e27a2a0",
   "branch": "main",
   "tag": "",
   "deps": {
-    "zen-fs-config": "0.4.0",
+    "zen-fs-config": "0.4.1",
     "zen-fs-sync": "0.4.0",
     "zen-fs-remotestoragejs": "1.2.14",
     "zen-fs-cache": "1.0.1",
