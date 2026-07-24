@@ -118,10 +118,29 @@ registerBackend('Gitee', async (options) => {
       }
 
       if (!defaultSha) {
-        // No branches at all — repo might be empty. Just skip tree init gracefully.
-        console.log(`[Gitee] No branches found in repo, skipping tree init`);
-        this.initialized = true;
-        return;
+        // No branches at all — repo is empty. We must create an initial file
+        // via the Contents API to implicitly create the branch.
+        // Gitee has no POST /git/refs endpoint, so we cannot create a branch
+        // from thin air; we need at least one commit.
+        console.log(`[Gitee] No branches found in repo, creating initial file to bootstrap branch "${this.api.branch}"...`);
+        const initRes = await fetch(
+          `${baseUrl}/repos/${this.api.owner}/${this.api.repo}/contents/.gitkeep?branch=${this.api.branch}&${auth}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: btoa(''),
+              message: `Initialize branch '${this.api.branch}'`,
+            }),
+          }
+        );
+        if (!initRes.ok) {
+          const errText = await initRes.text().catch(() => '');
+          throw new Error(`Gitee: failed to bootstrap empty repo: ${initRes.status} ${errText}`);
+        }
+        // After creating the initial file, the branch exists. Retry tree init.
+        this.initialized = false;
+        return origInit.call(this);
       }
 
       // POST /repos/{owner}/{repo}/branches to create branch
