@@ -98,7 +98,8 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
   const [connecting, setConnecting] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [primaryBackendId, setPrimaryBackendId] = useState<string | null>(null);
+  // primaryBackendId is always 'local-idb' in the new architecture
+  const [primaryBackendId] = useState<string | null>('local-idb');
   const connectParamsRef = useRef<{ appId: string; options: ConfigRepoOptions } | null>(null);
   /** Ref to the current repo so reconnect can safely dispose it even after a React re-render. */
   const repoRef = useRef<IConfigRepo | null>(null);
@@ -113,7 +114,6 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
       repoRef.current = r;
       setRepo(r);
       setConnected(true);
-      setPrimaryBackendId(options.primaryBackendId);
       await syncOnceAndStop(r);
       console.log('[version] connected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
@@ -134,7 +134,6 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
     setRepo(null);
     setConnected(false);
     setError(null);
-    setPrimaryBackendId(null);
     connectParamsRef.current = null;
     clearConnectParams();
     // Dispose AFTER clearing state so UI never sees a disposed repo
@@ -177,7 +176,6 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
         repoRef.current = r;
         setRepo(r);
         setConnected(true);
-        setPrimaryBackendId(saved.options.primaryBackendId);
         await syncOnceAndStop(r);
         console.log('[version] auto-reconnected:', versionDisplay, '| build:', buildTimeDisplay);
       })

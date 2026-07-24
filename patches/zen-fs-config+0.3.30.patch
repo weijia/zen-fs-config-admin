@@ -1,8 +1,48 @@
 diff --git a/node_modules/zen-fs-config/dist/index.d.mts b/node_modules/zen-fs-config/dist/index.d.mts
-index bed0e33..5957d65 100644
+index bed0e33..399fb92 100644
 --- a/node_modules/zen-fs-config/dist/index.d.mts
 +++ b/node_modules/zen-fs-config/dist/index.d.mts
-@@ -242,11 +242,33 @@ interface BackendInstance {
+@@ -98,14 +98,14 @@ interface CacheOptions {
+ }
+ /** Options for creating a ConfigRepo. */
+ interface ConfigRepoOptions {
+-    /** The backend ID (from .meta/backends.json) to use as this instance's primary. */
+-    primaryBackendId: string;
+-    /** Connection info for the primary backend. */
+-    backendInfo: {
++    /** The backend ID (from .meta/backends.json) to use as this instance's primary. Default: 'local-idb' */
++    primaryBackendId?: string;
++    /** Connection info for the primary backend. Optional - if provided, added as a replica. */
++    backendInfo?: {
+         type: string;
+         options: Record<string, unknown>;
+     };
+-    /** Node identifier. Auto-detected if not provided (see DESIGN.md §8.2). */
++    /** Node identifier. Auto-detected if not provided. */
+     nodeId?: string;
+     /** Cache configuration. */
+     cache?: CacheOptions;
+@@ -113,6 +113,8 @@ interface ConfigRepoOptions {
+     serializer?: ConfigSerializer;
+     /** Custom conflict handler. Called before auto-resolution. */
+     onConflict?: (conflict: ConflictInfo) => Promise<unknown | null>;
++    /** IndexedDB store name for the local primary backend. Default: 'zen-fs-config-{appId}' */
++    idbStoreName?: string;
+ }
+ /** The main configuration repository interface. */
+ interface IConfigRepo {
+@@ -157,6 +159,10 @@ interface IConfigRepo {
+     getBackends(): Promise<BackendsMeta | null>;
+     /** Write .meta/backends.json. */
+     updateBackends(meta: BackendsMeta): Promise<void>;
++    /** Add a new replica backend dynamically. */
++    addBackend(id: string, type: string, options: Record<string, unknown>, description?: string): Promise<void>;
++    /** Remove a replica backend dynamically. Cannot remove the primary. */
++    removeBackend(id: string): Promise<void>;
+     /**
+      * Delete a file and record a tombstone for cross-backend sync.
+      * The tombstone ensures the deletion propagates to all backends
+@@ -242,11 +248,33 @@ interface BackendInstance {
      readFileMeta?(path: string, opts?: any): Promise<any>;
      getRevision?(path: string): Promise<string | number | undefined>;
  }
@@ -37,18 +77,76 @@ index bed0e33..5957d65 100644
  declare function wrapZenFSFileSystem(config: any): Promise<BackendInstance>;
  
  /**
-@@ -379,4 +401,5 @@ declare function incrementVersion(fs: SyncableFS, configFilePath: string, newCon
+@@ -328,10 +356,15 @@ declare class ConfigRepo implements IConfigRepo {
+     private handleConflict;
+     private ensureDir;
+     private walkDir;
+-    writeMetaFile(path: string, data: BackendsMeta): Promise<void>;
++    writeMetaFile(path: string, data: any): Promise<void>;
+     readMetaFile<T>(path: string): Promise<T | null>;
+     getBackends(): Promise<BackendsMeta | null>;
+     updateBackends(meta: BackendsMeta): Promise<void>;
++    addBackend(id: string, type: string, options: Record<string, unknown>, description?: string): Promise<void>;
++    removeBackend(id: string): Promise<void>;
++    private readBackendFiles;
++    private writeBackendFile;
++    private removeBackendFile;
+     private tryParse;
+     private assertNotDisposed;
+ }
+@@ -379,4 +412,6 @@ declare function incrementVersion(fs: SyncableFS, configFilePath: string, newCon
   */
  declare function verifyOrRepairVersion(fs: SyncableFS, configFilePath: string, author: string): Promise<VersionMeta | null>;
  
 -export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getExtension, hasBackend, incrementVersion, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
-+export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getBackendMetadata, getExtension, hasBackend, incrementVersion, listBackendMetadata, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
++declare const LOCAL_IDB_BACKEND_ID: "local-idb";
++export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, LOCAL_IDB_BACKEND_ID, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getBackendMetadata, getExtension, hasBackend, incrementVersion, listBackendMetadata, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
 +export type { BackendMetadata, BackendParamDef };
 diff --git a/node_modules/zen-fs-config/dist/index.d.ts b/node_modules/zen-fs-config/dist/index.d.ts
-index bed0e33..5957d65 100644
+index bed0e33..399fb92 100644
 --- a/node_modules/zen-fs-config/dist/index.d.ts
 +++ b/node_modules/zen-fs-config/dist/index.d.ts
-@@ -242,11 +242,33 @@ interface BackendInstance {
+@@ -98,14 +98,14 @@ interface CacheOptions {
+ }
+ /** Options for creating a ConfigRepo. */
+ interface ConfigRepoOptions {
+-    /** The backend ID (from .meta/backends.json) to use as this instance's primary. */
+-    primaryBackendId: string;
+-    /** Connection info for the primary backend. */
+-    backendInfo: {
++    /** The backend ID (from .meta/backends.json) to use as this instance's primary. Default: 'local-idb' */
++    primaryBackendId?: string;
++    /** Connection info for the primary backend. Optional - if provided, added as a replica. */
++    backendInfo?: {
+         type: string;
+         options: Record<string, unknown>;
+     };
+-    /** Node identifier. Auto-detected if not provided (see DESIGN.md §8.2). */
++    /** Node identifier. Auto-detected if not provided. */
+     nodeId?: string;
+     /** Cache configuration. */
+     cache?: CacheOptions;
+@@ -113,6 +113,8 @@ interface ConfigRepoOptions {
+     serializer?: ConfigSerializer;
+     /** Custom conflict handler. Called before auto-resolution. */
+     onConflict?: (conflict: ConflictInfo) => Promise<unknown | null>;
++    /** IndexedDB store name for the local primary backend. Default: 'zen-fs-config-{appId}' */
++    idbStoreName?: string;
+ }
+ /** The main configuration repository interface. */
+ interface IConfigRepo {
+@@ -157,6 +159,10 @@ interface IConfigRepo {
+     getBackends(): Promise<BackendsMeta | null>;
+     /** Write .meta/backends.json. */
+     updateBackends(meta: BackendsMeta): Promise<void>;
++    /** Add a new replica backend dynamically. */
++    addBackend(id: string, type: string, options: Record<string, unknown>, description?: string): Promise<void>;
++    /** Remove a replica backend dynamically. Cannot remove the primary. */
++    removeBackend(id: string): Promise<void>;
+     /**
+      * Delete a file and record a tombstone for cross-backend sync.
+      * The tombstone ensures the deletion propagates to all backends
+@@ -242,11 +248,33 @@ interface BackendInstance {
      readFileMeta?(path: string, opts?: any): Promise<any>;
      getRevision?(path: string): Promise<string | number | undefined>;
  }
@@ -83,18 +181,44 @@ index bed0e33..5957d65 100644
  declare function wrapZenFSFileSystem(config: any): Promise<BackendInstance>;
  
  /**
-@@ -379,4 +401,5 @@ declare function incrementVersion(fs: SyncableFS, configFilePath: string, newCon
+@@ -328,10 +356,15 @@ declare class ConfigRepo implements IConfigRepo {
+     private handleConflict;
+     private ensureDir;
+     private walkDir;
+-    writeMetaFile(path: string, data: BackendsMeta): Promise<void>;
++    writeMetaFile(path: string, data: any): Promise<void>;
+     readMetaFile<T>(path: string): Promise<T | null>;
+     getBackends(): Promise<BackendsMeta | null>;
+     updateBackends(meta: BackendsMeta): Promise<void>;
++    addBackend(id: string, type: string, options: Record<string, unknown>, description?: string): Promise<void>;
++    removeBackend(id: string): Promise<void>;
++    private readBackendFiles;
++    private writeBackendFile;
++    private removeBackendFile;
+     private tryParse;
+     private assertNotDisposed;
+ }
+@@ -379,4 +412,6 @@ declare function incrementVersion(fs: SyncableFS, configFilePath: string, newCon
   */
  declare function verifyOrRepairVersion(fs: SyncableFS, configFilePath: string, author: string): Promise<VersionMeta | null>;
  
 -export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getExtension, hasBackend, incrementVersion, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
-+export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getBackendMetadata, getExtension, hasBackend, incrementVersion, listBackendMetadata, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
++declare const LOCAL_IDB_BACKEND_ID: "local-idb";
++export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, LOCAL_IDB_BACKEND_ID, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getBackendMetadata, getExtension, hasBackend, incrementVersion, listBackendMetadata, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
 +export type { BackendMetadata, BackendParamDef };
 diff --git a/node_modules/zen-fs-config/dist/index.js b/node_modules/zen-fs-config/dist/index.js
-index e8c878e..c216cf4 100644
+index e8c878e..37b9ac1 100644
 --- a/node_modules/zen-fs-config/dist/index.js
 +++ b/node_modules/zen-fs-config/dist/index.js
-@@ -272,10 +272,15 @@ function backendToSyncableFS(backend, name) {
+@@ -31,6 +31,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
+ var index_exports = {};
+ __export(index_exports, {
+   ConfigRepo: () => ConfigRepo,
++  LOCAL_IDB_BACKEND_ID: () => LOCAL_IDB_BACKEND_ID,
+   configKeyToFilePath: () => configKeyToFilePath,
+   createBackend: () => createBackend,
+   createConfigRepo: () => createConfigRepo,
+@@ -272,10 +273,15 @@ function backendToSyncableFS(backend, name) {
  
  // src/backend-registry.ts
  var registry = /* @__PURE__ */ new Map();
@@ -111,7 +235,7 @@ index e8c878e..c216cf4 100644
    return registry.delete(type);
  }
  async function createBackend(descriptor) {
-@@ -293,6 +298,12 @@ function hasBackend(type) {
+@@ -293,6 +299,12 @@ function hasBackend(type) {
  function listBackends() {
    return Array.from(registry.keys());
  }
@@ -124,7 +248,16 @@ index e8c878e..c216cf4 100644
  async function wrapZenFSFileSystem(config) {
    const zenfs = await import("@zenfs/core");
    const isolatedFS = await zenfs.resolveMountConfig(config);
-@@ -1022,8 +1033,23 @@ var ConfigRepo = class {
+@@ -444,6 +456,8 @@ async function verifyOrRepairVersion(fs, configFilePath, author) {
+ // src/config-repo.ts
+ var META_DIR = "/.meta";
+ var BACKENDS_FILE = `${META_DIR}/backends.json`;
++var LOCAL_IDB_BACKEND_ID = "local-idb";
++var BACKENDS_DIR = `${META_DIR}/backends`;
+ var CONFLICTS_DIR = `${META_DIR}/.conflicts`;
+ var DELETIONS_DIR = `${META_DIR}/.deleted`;
+ var NODES_DIR = "/nodes";
+@@ -1022,8 +1036,23 @@ var ConfigRepo = class {
      return results;
    }
    async writeMetaFile(path, data) {
@@ -149,13 +282,201 @@ index e8c878e..c216cf4 100644
      await this.cachedFS.writeFile(path, bytes);
      const author = `${this.appId}/${this.nodeId}`;
      const version = await incrementVersion(this.fullFS, path, bytes, author);
-@@ -1074,9 +1100,15 @@ async function createConfigRepo(appId, options) {
-     type: options.backendInfo.type,
-     options: options.backendInfo.options
+@@ -1039,16 +1068,178 @@ var ConfigRepo = class {
+     }
+   }
+   // -----------------------------------------------------------------------
++  // IConfigRepo — Per-backend file storage
++  // -----------------------------------------------------------------------
++  async readBackendFiles() {
++    this.assertNotDisposed();
++    const descriptors = [];
++    try {
++      const entries = await this.cachedFS.readdir(BACKENDS_DIR);
++      for (const entry of entries) {
++        if (!entry.endsWith(".json")) continue;
++        try {
++          const raw = await this.cachedFS.readFile(`${BACKENDS_DIR}/${entry}`);
++          const desc = JSON.parse(new TextDecoder().decode(toUint8Array(raw)));
++          if (desc.id && desc.type) {
++            descriptors.push(desc);
++          }
++        } catch {
++        }
++      }
++    } catch {
++      // Directory doesn't exist yet
++    }
++    return descriptors;
++  }
++  async writeBackendFile(id, descriptor) {
++    this.assertNotDisposed();
++    const path = `${BACKENDS_DIR}/${id}.json`;
++    await this.writeMetaFile(path, descriptor);
++  }
++  async removeBackendFile(id) {
++    this.assertNotDisposed();
++    const path = `${BACKENDS_DIR}/${id}.json`;
++    try {
++      await this.cachedFS.unlink(path);
++      try { await this.cachedFS.unlink(versionPathFor(path)); } catch {}
++    } catch {
++    }
++  }
++  // -----------------------------------------------------------------------
+   // IConfigRepo — Meta file access (no chroot)
+   // -----------------------------------------------------------------------
+   async getBackends() {
+     this.assertNotDisposed();
+-    return this.readMetaFile(BACKENDS_FILE);
++    const descriptors = await this.readBackendFiles();
++    if (descriptors.length === 0) {
++      // Fall back to backends.json for backward compatibility
++      const legacy = await this.readMetaFile(BACKENDS_FILE);
++      if (legacy) return legacy;
++    }
++    return { version: 1, backends: descriptors };
+   }
+   async updateBackends(meta) {
+     this.assertNotDisposed();
++    // Write individual backend files
++    const currentFiles = await this.readBackendFiles();
++    const currentIds = new Set(currentFiles.map(b => b.id));
++    const newIds = new Set(meta.backends.map(b => b.id));
++    
++    // Remove deleted backends
++    for (const id of currentIds) {
++      if (!newIds.has(id)) {
++        await this.removeBackendFile(id);
++      }
++    }
++    
++    // Write/update each backend
++    for (const desc of meta.backends) {
++      await this.writeBackendFile(desc.id, desc);
++    }
++    
++    // Also update backends.json for backward compat
+     await this.writeMetaFile(BACKENDS_FILE, meta);
+   }
++  async addBackend(id, type, options, description) {
++    this.assertNotDisposed();
++    const desc = { id, type, options, description };
++    await this.writeBackendFile(id, desc);
++    // Also update backends.json
++    const current = await this.getBackends();
++    if (current) {
++      const idx = current.backends.findIndex(b => b.id === id);
++      if (idx >= 0) {
++        current.backends[idx] = desc;
++      } else {
++        current.backends.push(desc);
++      }
++      await this.writeMetaFile(BACKENDS_FILE, current);
++    }
++    // Create the replica backend and add sync pair
++    try {
++      const instance = await createBackend(desc);
++      const syncable = backendToSyncableFS(instance, `${desc.type}(${desc.id})`);
++      this.replicaBackends.set(desc.id, { instance, syncable });
++      const pair = this.syncEngine.addPair(
++        this.fullFS,
++        syncable,
++        {
++          direction: import_zen_fs_sync.SyncDirection.BiDirectional,
++          conflictStrategy: "source-wins"
++        },
++        "/"
++      );
++      const conflictHandler = (event) => {
++        this.handleConflict(event);
++      };
++      this.syncEngine.on(pair.pairId, "conflict", conflictHandler);
++      this.syncEngine.watch(pair.pairId);
++      console.log(`[ConfigRepo] addBackend: ${id} (${type}) added with sync pair`);
++    } catch (err) {
++      console.error(`[ConfigRepo] addBackend: failed to create replica ${id}:`, err);
++      throw err;
++    }
++  }
++  async removeBackend(id) {
++    this.assertNotDisposed();
++    if (id === this.primaryBackendId) {
++      throw new Error("Cannot remove the primary backend");
++    }
++    // Remove sync pair
++    const replica = this.replicaBackends.get(id);
++    if (replica) {
++      // Find and remove the pair
++      for (const pairId of this.syncEngine.listPairs()) {
++        // We need to check which pair corresponds to this replica
++        // Since we don't have a direct mapping, dispose and recreate
++      }
++      if (replica.instance?.dispose) {
++        await replica.instance.dispose();
++      }
++      this.replicaBackends.delete(id);
++      console.log(`[ConfigRepo] removeBackend: ${id} removed from replicas`);
++    }
++    // Remove backend file
++    await this.removeBackendFile(id);
++    // Update backends.json
++    const current = await this.getBackends();
++    if (current) {
++      current.backends = current.backends.filter(b => b.id !== id);
++      await this.writeMetaFile(BACKENDS_FILE, current);
++    }
++    // Re-setup sync to clean up pairs
++    const remainingBackends = await this.readBackendFiles();
++    // Dispose existing sync engine and recreate
++    this.syncEngine.dispose();
++    this.syncEngine = new import_zen_fs_sync.ZenFSSync();
++    const nonPrimary = remainingBackends.filter(b => b.id !== this.primaryBackendId && b.enabled !== false);
++    for (const desc of nonPrimary) {
++      if (desc.id === id) continue;
++      try {
++        const instance = await createBackend(desc);
++        const syncable = backendToSyncableFS(instance, `${desc.type}(${desc.id})`);
++        this.replicaBackends.set(desc.id, { instance, syncable });
++      } catch (err) {
++        console.error(`[ConfigRepo] removeBackend: failed to recreate replica ${desc.id}:`, err);
++      }
++    }
++    for (const [replicaId, replica] of this.replicaBackends.entries()) {
++      const pair = this.syncEngine.addPair(
++        this.fullFS,
++        replica.syncable,
++        {
++          direction: import_zen_fs_sync.SyncDirection.BiDirectional,
++          conflictStrategy: "source-wins"
++        },
++        "/"
++      );
++      const conflictHandler = (event) => {
++        this.handleConflict(event);
++      };
++      this.syncEngine.on(pair.pairId, "conflict", conflictHandler);
++      this.syncEngine.watch(pair.pairId);
++    }
++  }
+   tryParse(content) {
+     try {
+       return JSON.parse(content);
+@@ -1070,53 +1261,87 @@ function toUint8Array(raw) {
+   return new Uint8Array(raw);
+ }
+ async function createConfigRepo(appId, options) {
++  // Always create IndexedDB as primary backend for fast local access
++  const idbStoreName = (options?.idbStoreName) || `zen-fs-config-${appId}`;
+   const primaryInstance = await createBackend({
+-    type: options.backendInfo.type,
+-    options: options.backendInfo.options
++    type: "IndexedDB",
++    options: { storeName: idbStoreName }
    });
 -  const cachedFS = primaryInstance;
 +  let cachedFS = primaryInstance;
-+  if (options.cache) {
++  if (options?.cache) {
 +    const { CachedFileSystem, MemoryCacheStore, IdbCacheStore } = await import("zen-fs-cache");
 +    const store = options.cache.storeType === "IdbCacheStore" ? new IdbCacheStore(options.cache.storePrefix) : new MemoryCacheStore();
 +    cachedFS = new CachedFileSystem(primaryInstance, store, { ttlMs: options.cache.ttlMs ?? 0 });
@@ -167,7 +488,127 @@ index e8c878e..c216cf4 100644
      console.log(`[createConfigRepo] /.meta/ ready`);
    } catch (err) {
      console.error(`[createConfigRepo] Failed to ensure /.meta/:`, err.message);
-@@ -1161,9 +1193,11 @@ async function createConfigRepo(appId, options) {
+   }
++  try {
++    await cachedFS.mkdir(BACKENDS_DIR);
++    console.log(`[createConfigRepo] /.meta/backends/ ready`);
++  } catch (err) {
++    console.error(`[createConfigRepo] Failed to ensure /.meta/backends/:`, err.message);
++  }
++
+   const tempRepo = new ConfigRepo(
+     appId,
+     "",
+-    options.primaryBackendId,
++    LOCAL_IDB_BACKEND_ID,
+     cachedFS,
+     createSerializerChain(),
+     void 0
+   );
+-  let backendsMeta = await tempRepo.readMetaFile(BACKENDS_FILE);
+-  if (!backendsMeta) {
+-    backendsMeta = {
+-      version: 1,
+-      backends: [
+-        {
+-          id: options.primaryBackendId,
+-          type: options.backendInfo.type,
+-          options: options.backendInfo.options
+-        }
+-      ]
++
++  // Read existing backend descriptors from individual files
++  let backendsList = await tempRepo.readBackendFiles();
++  
++  const isFirstInit = !backendsList.length;
++  
++  if (isFirstInit) {
++    // First init: write the primary IndexedDB backend
++    const primaryDesc = {
++      id: LOCAL_IDB_BACKEND_ID,
++      type: "IndexedDB",
++      options: { storeName: idbStoreName }
+     };
+-    console.log(`[createConfigRepo] First init: using bootstrap backends: ${backendsMeta.backends.map((b) => b.id).join(", ")}`);
++    await tempRepo.writeBackendFile(LOCAL_IDB_BACKEND_ID, primaryDesc);
++    backendsList = [primaryDesc];
++    console.log(`[createConfigRepo] First init: primary backend ${LOCAL_IDB_BACKEND_ID}`);
+   } else {
+-    console.log(`[createConfigRepo] Reconnect: using stored backends: ${backendsMeta.backends.map((b) => b.id).join(", ")}`);
++    console.log(`[createConfigRepo] Reconnect: found ${backendsList.length} backend(s): ${backendsList.map((b) => b.id).join(", ")}`);
+   }
+-  const hasPrimary = backendsMeta.backends.some(
+-    (b) => b.id === options.primaryBackendId
+-  );
+-  if (!hasPrimary) {
+-    backendsMeta.backends.unshift({
+-      id: options.primaryBackendId,
+-      type: options.backendInfo.type,
+-      options: options.backendInfo.options
+-    });
++
++  // If user passed a backendInfo, add it as a replica if not already present
++  if (options?.backendInfo) {
++    const existingIdx = backendsList.findIndex(
++      (b) => b.id === options.primaryBackendId || 
++             (b.type === options.backendInfo.type && JSON.stringify(b.options) === JSON.stringify(options.backendInfo.options))
++    );
++    if (existingIdx < 0) {
++      const replicaId = options.primaryBackendId || `${options.backendInfo.type.toLowerCase()}-${Date.now().toString(36)}`;
++      const replicaDesc = {
++        id: replicaId,
++        type: options.backendInfo.type,
++        options: options.backendInfo.options
++      };
++      backendsList.push(replicaDesc);
++      await tempRepo.writeBackendFile(replicaId, replicaDesc);
++      console.log(`[createConfigRepo] Added replica backend: ${replicaId} (${options.backendInfo.type})`);
++    }
+   }
+-  await tempRepo.writeMetaFile(BACKENDS_FILE, backendsMeta);
+-  let nodeId = options.nodeId;
++
++  // Also write the combined backends.json for backward compat
++  await tempRepo.writeMetaFile(BACKENDS_FILE, {
++    version: 1,
++    backends: backendsList
++  });
++
++  // Determine nodeId
++  let nodeId = options?.nodeId;
+   if (!nodeId) {
+     nodeId = process.env.NODE_ID;
+   }
+@@ -1137,19 +1362,16 @@ async function createConfigRepo(appId, options) {
+     } catch {
+     }
+   }
+-  const serializer = createSerializerChain(options.serializer);
++  const serializer = createSerializerChain(options?.serializer);
+   const repo = new ConfigRepo(
+     appId,
+     nodeId,
+-    options.primaryBackendId,
++    LOCAL_IDB_BACKEND_ID,
+     cachedFS,
+     serializer,
+-    options.onConflict
+-  );
+-  await repo.setupSync(
+-    backendsMeta.backends,
+-    options.primaryBackendId
++    options?.onConflict
+   );
++  await repo.setupSync(backendsList, LOCAL_IDB_BACKEND_ID);
+   await repo.syncMetaToReplicas();
+   await repo.load();
+   return repo;
+@@ -1157,13 +1379,16 @@ async function createConfigRepo(appId, options) {
+ // Annotate the CommonJS export names for ESM import in node:
+ 0 && (module.exports = {
+   ConfigRepo,
++  LOCAL_IDB_BACKEND_ID,
+   configKeyToFilePath,
    createBackend,
    createConfigRepo,
    createSerializerChain,
@@ -180,7 +621,7 @@ index e8c878e..c216cf4 100644
    readVersion,
    registerBackend,
 diff --git a/node_modules/zen-fs-config/dist/index.mjs b/node_modules/zen-fs-config/dist/index.mjs
-index 85407da..bcf74bb 100644
+index 85407da..c9d2bea 100644
 --- a/node_modules/zen-fs-config/dist/index.mjs
 +++ b/node_modules/zen-fs-config/dist/index.mjs
 @@ -223,10 +223,15 @@ function backendToSyncableFS(backend, name) {
@@ -213,7 +654,16 @@ index 85407da..bcf74bb 100644
  async function wrapZenFSFileSystem(config) {
    const zenfs = await import("@zenfs/core");
    const isolatedFS = await zenfs.resolveMountConfig(config);
-@@ -973,8 +984,23 @@ var ConfigRepo = class {
+@@ -395,6 +406,8 @@ async function verifyOrRepairVersion(fs, configFilePath, author) {
+ // src/config-repo.ts
+ var META_DIR = "/.meta";
+ var BACKENDS_FILE = `${META_DIR}/backends.json`;
++var LOCAL_IDB_BACKEND_ID = "local-idb";
++var BACKENDS_DIR = `${META_DIR}/backends`;
+ var CONFLICTS_DIR = `${META_DIR}/.conflicts`;
+ var DELETIONS_DIR = `${META_DIR}/.deleted`;
+ var NODES_DIR = "/nodes";
+@@ -973,8 +986,23 @@ var ConfigRepo = class {
      return results;
    }
    async writeMetaFile(path, data) {
@@ -238,13 +688,201 @@ index 85407da..bcf74bb 100644
      await this.cachedFS.writeFile(path, bytes);
      const author = `${this.appId}/${this.nodeId}`;
      const version = await incrementVersion(this.fullFS, path, bytes, author);
-@@ -1025,9 +1051,15 @@ async function createConfigRepo(appId, options) {
-     type: options.backendInfo.type,
-     options: options.backendInfo.options
+@@ -990,16 +1018,178 @@ var ConfigRepo = class {
+     }
+   }
+   // -----------------------------------------------------------------------
++  // IConfigRepo — Per-backend file storage
++  // -----------------------------------------------------------------------
++  async readBackendFiles() {
++    this.assertNotDisposed();
++    const descriptors = [];
++    try {
++      const entries = await this.cachedFS.readdir(BACKENDS_DIR);
++      for (const entry of entries) {
++        if (!entry.endsWith(".json")) continue;
++        try {
++          const raw = await this.cachedFS.readFile(`${BACKENDS_DIR}/${entry}`);
++          const desc = JSON.parse(new TextDecoder().decode(toUint8Array(raw)));
++          if (desc.id && desc.type) {
++            descriptors.push(desc);
++          }
++        } catch {
++        }
++      }
++    } catch {
++      // Directory doesn't exist yet
++    }
++    return descriptors;
++  }
++  async writeBackendFile(id, descriptor) {
++    this.assertNotDisposed();
++    const path = `${BACKENDS_DIR}/${id}.json`;
++    await this.writeMetaFile(path, descriptor);
++  }
++  async removeBackendFile(id) {
++    this.assertNotDisposed();
++    const path = `${BACKENDS_DIR}/${id}.json`;
++    try {
++      await this.cachedFS.unlink(path);
++      try { await this.cachedFS.unlink(versionPathFor(path)); } catch {}
++    } catch {
++    }
++  }
++  // -----------------------------------------------------------------------
+   // IConfigRepo — Meta file access (no chroot)
+   // -----------------------------------------------------------------------
+   async getBackends() {
+     this.assertNotDisposed();
+-    return this.readMetaFile(BACKENDS_FILE);
++    const descriptors = await this.readBackendFiles();
++    if (descriptors.length === 0) {
++      // Fall back to backends.json for backward compatibility
++      const legacy = await this.readMetaFile(BACKENDS_FILE);
++      if (legacy) return legacy;
++    }
++    return { version: 1, backends: descriptors };
+   }
+   async updateBackends(meta) {
+     this.assertNotDisposed();
++    // Write individual backend files
++    const currentFiles = await this.readBackendFiles();
++    const currentIds = new Set(currentFiles.map(b => b.id));
++    const newIds = new Set(meta.backends.map(b => b.id));
++    
++    // Remove deleted backends
++    for (const id of currentIds) {
++      if (!newIds.has(id)) {
++        await this.removeBackendFile(id);
++      }
++    }
++    
++    // Write/update each backend
++    for (const desc of meta.backends) {
++      await this.writeBackendFile(desc.id, desc);
++    }
++    
++    // Also update backends.json for backward compat
+     await this.writeMetaFile(BACKENDS_FILE, meta);
+   }
++  async addBackend(id, type, options, description) {
++    this.assertNotDisposed();
++    const desc = { id, type, options, description };
++    await this.writeBackendFile(id, desc);
++    // Also update backends.json
++    const current = await this.getBackends();
++    if (current) {
++      const idx = current.backends.findIndex(b => b.id === id);
++      if (idx >= 0) {
++        current.backends[idx] = desc;
++      } else {
++        current.backends.push(desc);
++      }
++      await this.writeMetaFile(BACKENDS_FILE, current);
++    }
++    // Create the replica backend and add sync pair
++    try {
++      const instance = await createBackend(desc);
++      const syncable = backendToSyncableFS(instance, `${desc.type}(${desc.id})`);
++      this.replicaBackends.set(desc.id, { instance, syncable });
++      const pair = this.syncEngine.addPair(
++        this.fullFS,
++        syncable,
++        {
++          direction: SyncDirection.BiDirectional,
++          conflictStrategy: "source-wins"
++        },
++        "/"
++      );
++      const conflictHandler = (event) => {
++        this.handleConflict(event);
++      };
++      this.syncEngine.on(pair.pairId, "conflict", conflictHandler);
++      this.syncEngine.watch(pair.pairId);
++      console.log(`[ConfigRepo] addBackend: ${id} (${type}) added with sync pair`);
++    } catch (err) {
++      console.error(`[ConfigRepo] addBackend: failed to create replica ${id}:`, err);
++      throw err;
++    }
++  }
++  async removeBackend(id) {
++    this.assertNotDisposed();
++    if (id === this.primaryBackendId) {
++      throw new Error("Cannot remove the primary backend");
++    }
++    // Remove sync pair
++    const replica = this.replicaBackends.get(id);
++    if (replica) {
++      // Find and remove the pair
++      for (const pairId of this.syncEngine.listPairs()) {
++        // We need to check which pair corresponds to this replica
++        // Since we don't have a direct mapping, dispose and recreate
++      }
++      if (replica.instance?.dispose) {
++        await replica.instance.dispose();
++      }
++      this.replicaBackends.delete(id);
++      console.log(`[ConfigRepo] removeBackend: ${id} removed from replicas`);
++    }
++    // Remove backend file
++    await this.removeBackendFile(id);
++    // Update backends.json
++    const current = await this.getBackends();
++    if (current) {
++      current.backends = current.backends.filter(b => b.id !== id);
++      await this.writeMetaFile(BACKENDS_FILE, current);
++    }
++    // Re-setup sync to clean up pairs
++    const remainingBackends = await this.readBackendFiles();
++    // Dispose existing sync engine and recreate
++    this.syncEngine.dispose();
++    this.syncEngine = new ZenFSSync();
++    const nonPrimary = remainingBackends.filter(b => b.id !== this.primaryBackendId && b.enabled !== false);
++    for (const desc of nonPrimary) {
++      if (desc.id === id) continue;
++      try {
++        const instance = await createBackend(desc);
++        const syncable = backendToSyncableFS(instance, `${desc.type}(${desc.id})`);
++        this.replicaBackends.set(desc.id, { instance, syncable });
++      } catch (err) {
++        console.error(`[ConfigRepo] removeBackend: failed to recreate replica ${desc.id}:`, err);
++      }
++    }
++    for (const [replicaId, replica] of this.replicaBackends.entries()) {
++      const pair = this.syncEngine.addPair(
++        this.fullFS,
++        replica.syncable,
++        {
++          direction: SyncDirection.BiDirectional,
++          conflictStrategy: "source-wins"
++        },
++        "/"
++      );
++      const conflictHandler = (event) => {
++        this.handleConflict(event);
++      };
++      this.syncEngine.on(pair.pairId, "conflict", conflictHandler);
++      this.syncEngine.watch(pair.pairId);
++    }
++  }
+   tryParse(content) {
+     try {
+       return JSON.parse(content);
+@@ -1021,53 +1211,87 @@ function toUint8Array(raw) {
+   return new Uint8Array(raw);
+ }
+ async function createConfigRepo(appId, options) {
++  // Always create IndexedDB as primary backend for fast local access
++  const idbStoreName = (options?.idbStoreName) || `zen-fs-config-${appId}`;
+   const primaryInstance = await createBackend({
+-    type: options.backendInfo.type,
+-    options: options.backendInfo.options
++    type: "IndexedDB",
++    options: { storeName: idbStoreName }
    });
 -  const cachedFS = primaryInstance;
 +  let cachedFS = primaryInstance;
-+  if (options.cache) {
++  if (options?.cache) {
 +    const { CachedFileSystem, MemoryCacheStore, IdbCacheStore } = await import("zen-fs-cache");
 +    const store = options.cache.storeType === "IdbCacheStore" ? new IdbCacheStore(options.cache.storePrefix) : new MemoryCacheStore();
 +    cachedFS = new CachedFileSystem(primaryInstance, store, { ttlMs: options.cache.ttlMs ?? 0 });
@@ -256,7 +894,126 @@ index 85407da..bcf74bb 100644
      console.log(`[createConfigRepo] /.meta/ ready`);
    } catch (err) {
      console.error(`[createConfigRepo] Failed to ensure /.meta/:`, err.message);
-@@ -1111,9 +1143,11 @@ export {
+   }
++  try {
++    await cachedFS.mkdir(BACKENDS_DIR);
++    console.log(`[createConfigRepo] /.meta/backends/ ready`);
++  } catch (err) {
++    console.error(`[createConfigRepo] Failed to ensure /.meta/backends/:`, err.message);
++  }
++
+   const tempRepo = new ConfigRepo(
+     appId,
+     "",
+-    options.primaryBackendId,
++    LOCAL_IDB_BACKEND_ID,
+     cachedFS,
+     createSerializerChain(),
+     void 0
+   );
+-  let backendsMeta = await tempRepo.readMetaFile(BACKENDS_FILE);
+-  if (!backendsMeta) {
+-    backendsMeta = {
+-      version: 1,
+-      backends: [
+-        {
+-          id: options.primaryBackendId,
+-          type: options.backendInfo.type,
+-          options: options.backendInfo.options
+-        }
+-      ]
++
++  // Read existing backend descriptors from individual files
++  let backendsList = await tempRepo.readBackendFiles();
++  
++  const isFirstInit = !backendsList.length;
++  
++  if (isFirstInit) {
++    // First init: write the primary IndexedDB backend
++    const primaryDesc = {
++      id: LOCAL_IDB_BACKEND_ID,
++      type: "IndexedDB",
++      options: { storeName: idbStoreName }
+     };
+-    console.log(`[createConfigRepo] First init: using bootstrap backends: ${backendsMeta.backends.map((b) => b.id).join(", ")}`);
++    await tempRepo.writeBackendFile(LOCAL_IDB_BACKEND_ID, primaryDesc);
++    backendsList = [primaryDesc];
++    console.log(`[createConfigRepo] First init: primary backend ${LOCAL_IDB_BACKEND_ID}`);
+   } else {
+-    console.log(`[createConfigRepo] Reconnect: using stored backends: ${backendsMeta.backends.map((b) => b.id).join(", ")}`);
++    console.log(`[createConfigRepo] Reconnect: found ${backendsList.length} backend(s): ${backendsList.map((b) => b.id).join(", ")}`);
+   }
+-  const hasPrimary = backendsMeta.backends.some(
+-    (b) => b.id === options.primaryBackendId
+-  );
+-  if (!hasPrimary) {
+-    backendsMeta.backends.unshift({
+-      id: options.primaryBackendId,
+-      type: options.backendInfo.type,
+-      options: options.backendInfo.options
+-    });
++
++  // If user passed a backendInfo, add it as a replica if not already present
++  if (options?.backendInfo) {
++    const existingIdx = backendsList.findIndex(
++      (b) => b.id === options.primaryBackendId || 
++             (b.type === options.backendInfo.type && JSON.stringify(b.options) === JSON.stringify(options.backendInfo.options))
++    );
++    if (existingIdx < 0) {
++      const replicaId = options.primaryBackendId || `${options.backendInfo.type.toLowerCase()}-${Date.now().toString(36)}`;
++      const replicaDesc = {
++        id: replicaId,
++        type: options.backendInfo.type,
++        options: options.backendInfo.options
++      };
++      backendsList.push(replicaDesc);
++      await tempRepo.writeBackendFile(replicaId, replicaDesc);
++      console.log(`[createConfigRepo] Added replica backend: ${replicaId} (${options.backendInfo.type})`);
++    }
+   }
+-  await tempRepo.writeMetaFile(BACKENDS_FILE, backendsMeta);
+-  let nodeId = options.nodeId;
++
++  // Also write the combined backends.json for backward compat
++  await tempRepo.writeMetaFile(BACKENDS_FILE, {
++    version: 1,
++    backends: backendsList
++  });
++
++  // Determine nodeId
++  let nodeId = options?.nodeId;
+   if (!nodeId) {
+     nodeId = process.env.NODE_ID;
+   }
+@@ -1088,32 +1312,32 @@ async function createConfigRepo(appId, options) {
+     } catch {
+     }
+   }
+-  const serializer = createSerializerChain(options.serializer);
++  const serializer = createSerializerChain(options?.serializer);
+   const repo = new ConfigRepo(
+     appId,
+     nodeId,
+-    options.primaryBackendId,
++    LOCAL_IDB_BACKEND_ID,
+     cachedFS,
+     serializer,
+-    options.onConflict
+-  );
+-  await repo.setupSync(
+-    backendsMeta.backends,
+-    options.primaryBackendId
++    options?.onConflict
+   );
++  await repo.setupSync(backendsList, LOCAL_IDB_BACKEND_ID);
+   await repo.syncMetaToReplicas();
+   await repo.load();
+   return repo;
+ }
+ export {
+   ConfigRepo,
++  LOCAL_IDB_BACKEND_ID,
+   configKeyToFilePath,
    createBackend,
    createConfigRepo,
    createSerializerChain,

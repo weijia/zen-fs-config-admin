@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
-import type { BackendDescriptor, BackendsMeta } from 'zen-fs-config';
+import type { BackendDescriptor } from 'zen-fs-config';
 import { getBackendTypeDef, getBackendTypes } from '../backend-types';
 import { serializeBackend, deserializeBackend } from '../backend-config-string';
 
@@ -35,9 +35,9 @@ export default function BackendsPage() {
     setIsNew(true);
     setImportStr('');
     setImportError('');
-    const def = getBackendTypeDef('GitHub')!;
+    const def = getBackendTypeDef('Gitee')!;
     const autoId = `${def.type.toLowerCase()}-${Date.now()}`;
-    setFormState({ id: autoId, type: 'GitHub', options: { ...def.defaultOptions }, description: '' });
+    setFormState({ id: autoId, type: 'Gitee', options: { ...def.defaultOptions }, description: '' });
   };
 
   const changeType = (type: string) => {
@@ -107,54 +107,68 @@ export default function BackendsPage() {
 
   const handleSave = async () => {
     if (!repo || !formState.id || !formState.type) return;
-    const newBackend: BackendDescriptor = {
-      id: formState.id,
-      type: formState.type,
-      options: formState.options ?? {},
-      description: formState.description,
-      enabled: true,
-    } as any;
-    let updated: BackendDescriptor[];
+
+    // Close modal immediately
+    setEditing(null);
+    setIsNew(false);
+
     if (isNew) {
-      if (backends.some(b => b.id === newBackend.id)) {
+      if (backends.some(b => b.id === formState.id)) {
         setMessage('Backend ID already exists');
         return;
       }
-      updated = [...backends, newBackend];
+      // Use the new addBackend API — creates sync pair immediately
+      try {
+        await repo.addBackend(
+          formState.id,
+          formState.type,
+          formState.options ?? {},
+          formState.description,
+        );
+        setMessage('Replica added, syncing...');
+        setTimeout(() => setMessage(''), 3000);
+      } catch (err: any) {
+        setMessage(`Failed to add: ${err?.message}`);
+        setTimeout(() => setMessage(''), 5000);
+      }
     } else {
-      updated = backends.map(b => b.id === newBackend.id ? newBackend : b);
-    }
-    const meta: BackendsMeta = { version: 1, backends: updated };
-    await repo.updateBackends(meta);
-
-    // Close modal immediately after save succeeds
-    setEditing(null);
-    setIsNew(false);
-    setMessage('Saved, reconnecting...');
-    setTimeout(() => setMessage(''), 3000);
-
-    // Sync and reconnect — don't let failures keep the modal open
-    try { await repo.syncMetaToReplicas(); } catch (err: any) {
-      console.warn('[BackendsPage] syncMetaToReplicas failed:', err?.message);
+      // Editing existing — use updateBackends + reconnect
+      const newBackend: BackendDescriptor = {
+        id: formState.id,
+        type: formState.type,
+        options: formState.options ?? {},
+        description: formState.description,
+      } as any;
+      const updated = backends.map(b => b.id === newBackend.id ? newBackend : b);
+      await repo.updateBackends({ version: 1, backends: updated });
+      setMessage('Saved, reconnecting...');
+      setTimeout(() => setMessage(''), 3000);
+      try { await repo.syncMetaToReplicas(); } catch (err: any) {
+        console.warn('[BackendsPage] syncMetaToReplicas failed:', err?.message);
+      }
+      try { await reconnect(); } catch (err: any) {
+        console.warn('[BackendsPage] reconnect failed:', err?.message);
+      }
     }
     await loadBackends();
-    try { await reconnect(); } catch (err: any) {
-      console.warn('[BackendsPage] reconnect failed:', err?.message);
-      setMessage(`Saved, but reconnect failed: ${err?.message}`);
-      setTimeout(() => setMessage(''), 5000);
-    }
   };
 
   const handleRemove = async (id: string) => {
     if (!repo) return;
-    const updated = backends.filter(b => b.id !== id);
-    await repo.updateBackends({ version: 1, backends: updated });
-
-    // Immediately sync .meta/ to all replicas
-    await repo.syncMetaToReplicas();
-
+    // Use the new removeBackend API — cleans up sync pair automatically
+    try {
+      await repo.removeBackend(id);
+      setMessage(`Removed ${id}`);
+      setTimeout(() => setMessage(''), 3000);
+    } catch (err: any) {
+      // Fallback to old method if removeBackend fails
+      console.warn('[BackendsPage] removeBackend failed, using fallback:', err?.message);
+      const updated = backends.filter(b => b.id !== id);
+      await repo.updateBackends({ version: 1, backends: updated });
+      await repo.syncMetaToReplicas();
+      await reconnect();
+    }
     await loadBackends();
-    await reconnect();
   };
 
   if (!repo) return <div className="loading">No repo connected</div>;

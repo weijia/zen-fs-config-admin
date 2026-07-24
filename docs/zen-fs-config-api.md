@@ -41,11 +41,11 @@ function createConfigRepo(
 
 ```typescript
 interface ConfigRepoOptions {
-  /** 主后端在 backends.json 中的 ID */
-  primaryBackendId: string;
+  /** 可选：传入的后端 ID（作为 replica 添加） */
+  primaryBackendId?: string;
 
-  /** 主后端的连接信息 */
-  backendInfo: {
+  /** 可选：传入的后端连接信息（作为 replica 添加到本地 IndexedDB） */
+  backendInfo?: {
     type: string;
     options: Record<string, unknown>;
   };
@@ -61,22 +61,51 @@ interface ConfigRepoOptions {
 
   /** 冲突处理回调 */
   onConflict?: (conflict: ConflictInfo) => Promise<unknown | null>;
+
+  /** IndexedDB store 名称（默认: `zen-fs-config-{appId}`） */
+  idbStoreName?: string;
 }
 ```
 
-#### `primaryBackendId`
+> **架构说明**: `createConfigRepo` **始终** 创建一个本地 IndexedDB 作为主后端（ID 为 `"local-idb"`），所有配置操作直接在 IndexedDB 上执行，确保本地访问速度。如果传入了 `backendInfo`，该后端会被添加为 **replica**（副本），用于同步备份。不再需要指定外部后端作为主后端。
+
+#### `backendInfo` (可选)
+
+**类型**: `{ type: string; options: Record<string, unknown> }`  
+**必填**: 否
+
+如果提供了 `backendInfo`，这个后端会被创建为一个 **replica**（副本），与本地 IndexedDB 主后端进行双向同步。
+
+**示例**：创建一个带 Gitee 同步的配置仓库：
+
+```typescript
+const repo = await createConfigRepo('admin', {
+  primaryBackendId: 'my-gitee',
+  backendInfo: {
+    type: 'Gitee',
+    options: { owner: 'weijia', repo: 'configs', branch: 'master', token: 'xxx' },
+  },
+});
+// → IndexedDB 是主后端（ID: "local-idb"）
+// → Gitee 是 replica（ID: "my-gitee"）
+// → 配置在本地读写，flush 时同步到 Gitee
+```
+
+不传 `backendInfo` 也可以正常创建（纯本地模式）：
+
+```typescript
+const repo = await createConfigRepo('admin', {});
+// → 只有 IndexedDB 主后端，无远程同步
+```
+
+#### `idbStoreName` (可选)
 
 **类型**: `string`  
-**必填**: 是
+**默认值**: `'zen-fs-config-{appId}'`
 
-当前实例使用哪个后端作为主后端。这个 ID 会被写入 `/.meta/backends.json`。
-
-**示例**: `'admin-primary'`, `'local-memory'`, `'github-main'`
+本地 IndexedDB 的 store 名称。不同 appId 默认使用不同的 store，避免数据冲突。
 
 #### `backendInfo.type`
-
-**类型**: `string`  
-**必填**: 是
 
 主后端的类型名。**必须在调用 `createConfigRepo` 之前通过 `registerBackend()` 注册过**。
 
@@ -120,11 +149,11 @@ const meta = getBackendMetadata('Gitee');
 // }
 ```
 
-所以创建 Gitee 后端的配置是：
+所以创建 Gitee **replica** 后端的配置是：
 
 ```typescript
 const repo = await createConfigRepo('admin', {
-  primaryBackendId: 'my-gitee',
+  primaryBackendId: 'my-gitee',        // replica 的 ID
   backendInfo: {
     type: 'Gitee',
     options: {
@@ -132,10 +161,10 @@ const repo = await createConfigRepo('admin', {
       repo: 'my-configs',
       branch: 'master',
       token: 'xxx',
-      // baseUrl 是可选的，不传则使用默认
     },
   },
 });
+// IndexedDB 是主后端（自动创建），Gitee 是 replica
 ```
 
 #### `nodeId`
@@ -404,10 +433,20 @@ await repo.syncMetaToReplicas();
 ### 后端拓扑管理
 
 ```typescript
-// 读取后端配置
+// 读取后端配置（从 .meta/backends/ 目录读取每个后端文件）
 const backends = await repo.getBackends();
+// → { version: 1, backends: [{ id: 'local-idb', type: 'IndexedDB', ... }, ...] }
 
-// 更新后端配置（例如添加新 replica）
+// 动态添加 replica 后端（自动创建 sync pair）
+await repo.addBackend('my-webdav', 'WebDAV', { url: 'https://dav.example.com' }, 'My WebDAV backup');
+// → 自动创建后端实例，注册双向同步，写入 .meta/backends/my-webdav.json
+
+// 动态移除 replica 后端（自动清理 sync pair）
+await repo.removeBackend('my-webdav');
+// → 移除 sync pair，dispose 后端实例，删除配置文件
+// 注意：不能移除 primary backend ('local-idb')
+
+// 也可以用低级 API 直接操作：
 await repo.updateBackends({
   version: 1,
   backends: [
@@ -457,16 +496,19 @@ await repo.dispose();
 
 ### 同步对（Sync Pair）的建立
 
-调用 `createConfigRepo` 时，内部会读取 `/.meta/backends.json`。对于其中**每个非 primary 且非 disabled** 的后端：
+调用 `createConfigRepo` 时，内部会：
 
-1. 用 `createBackend()` 创建后端实例
-2. 用 `backendToSyncableFS()` 包装成 `SyncableFS`
-3. 在 `syncEngine` 中注册一个双向同步 pair：
-   - `source` = `fullFS`（主后端 + cache 层）
-   - `target` = replica 后端
-   - `direction` = `BiDirectional`
-   - `conflictStrategy` = `source-wins`
-   - `root` = `/`
+1. **始终创建 IndexedDB** 作为主后端（ID: `"local-idb"`）
+2. 读取 `.meta/backends/` 目录中每个非 primary 且非 disabled 的后端配置
+3. 对于每个 replica 后端：
+   - 用 `createBackend()` 创建后端实例
+   - 用 `backendToSyncableFS()` 包装成 `SyncableFS`
+   - 在 `syncEngine` 中注册一个双向同步 pair：
+     - `source` = `fullFS`（IndexedDB 主后端 + cache 层）
+     - `target` = replica 后端
+     - `direction` = `BiDirectional`
+     - `conflictStrategy` = `source-wins`（IndexedDB 内容优先）
+     - `root` = `/`
 
 ### 同步触发时机
 
@@ -544,7 +586,11 @@ await repo.resolveConflict(c.conflictId, merged);
 │       └── debug.json
 │
 └── .meta/                      # 元数据目录
-    ├── backends.json           # 后端拓扑配置
+    ├── backends.json           # 后端拓扑配置（向后兼容，自动生成）
+    ├── backends/               # 每个后端一个独立配置文件
+    │   ├── local-idb.json     # 主后端（IndexedDB，自动创建）
+    │   ├── my-gitee.json      # Gitee replica（如果配置了的话）
+    │   └── my-webdav.json     # WebDAV replica（如果配置了的话）
     ├── .node-id               # 节点 ID 持久化文件
     ├── .conflicts/            # 冲突归档
     │   └── {timestamp}_{path}/
@@ -688,21 +734,16 @@ await repo.flush();
 
 以下每个场景都是独立的最简示例，展示了 zen-fs-config 的核心生命周期。
 
-### 场景 1：初始化
+### 场景 1：初始化（纯本地）
 
-第一次创建配置仓库。此时后端上什么都没有，`createConfigRepo` 会自动初始化 `/.meta/backends.json`。
+第一次创建配置仓库。不需要传任何后端参数，`createConfigRepo` 会自动创建本地 IndexedDB 作为主后端。
 
 ```typescript
 import { createConfigRepo } from 'zen-fs-config';
-// ↑ 前提：已在 app 启动时注册了后端类型（如 IndexedDB、Gitee 等）
 
-const repo = await createConfigRepo('my-app', {
-  primaryBackendId: 'local',
-  backendInfo: {
-    type: 'InMemory',       // 用内置的内存后端，最简，无需注册
-    options: {},
-  },
-});
+const repo = await createConfigRepo('my-app', {});
+// → 自动创建 IndexedDB 主后端（store: "zen-fs-config-my-app"）
+// → 无远程 replica
 
 console.log('appId:', repo.appId);       // 'my-app'
 console.log('nodeId:', repo.nodeId);     // 'node-xxx'（自动生成）
@@ -710,7 +751,28 @@ console.log('nodeId:', repo.nodeId);     // 'node-xxx'（自动生成）
 await repo.dispose();
 ```
 
-> `InMemory` 是唯一不需要 `registerBackend` 的后端。生产环境应该换成持久化后端（IndexedDB、Gitee 等）。
+> 不传 `backendInfo` 就是纯本地模式，数据只存在浏览器 IndexedDB 中。
+
+### 场景 1b：初始化（带远程同步）
+
+创建配置仓库的同时指定一个远程后端作为 replica。
+
+```typescript
+import { createConfigRepo } from 'zen-fs-config';
+// 前提：已注册 IndexedDB 和 Gitee 后端类型
+
+const repo = await createConfigRepo('my-app', {
+  primaryBackendId: 'my-gitee',
+  backendInfo: {
+    type: 'Gitee',
+    options: { owner: 'weijia', repo: 'configs', branch: 'master', token: 'xxx' },
+  },
+});
+// → IndexedDB 是主后端（自动创建）
+// → Gitee 是 replica，flush 时双向同步
+
+await repo.dispose();
+```
 
 ### 场景 2：设置新的配置
 
@@ -745,40 +807,29 @@ await repo.dispose();
 ```typescript
 import { createConfigRepo } from 'zen-fs-config';
 
-const repo = await createConfigRepo('my-app', {
-  primaryBackendId: 'local',
-  backendInfo: { type: 'InMemory', options: {} },
-});
+const repo = await createConfigRepo('my-app', {});
+// IndexedDB 主后端自动创建
 
 // 先写入一些配置
 repo.setConfig('/database', { host: 'localhost', port: 5432 });
 
-// 读取当前后端拓扑
-const meta = await repo.getBackends();
-console.log('当前后端:', meta!.backends.map(b => b.id)); // ['local']
+// 动态添加 Gitee replica（自动创建 sync pair）
+await repo.addBackend(
+  'gitee-backup',           // ID
+  'Gitee',                  // type
+  {
+    owner: 'weijia',
+    repo: 'my-configs',
+    branch: 'master',
+    token: 'your_token',
+  },
+  'My Gitee backup'         // description（可选）
+);
 
-// 添加 Gitee 副本
-await repo.updateBackends({
-  version: 1,
-  backends: [
-    ...meta!.backends,
-    {
-      id: 'gitee-backup',
-      type: 'Gitee',
-      options: {
-        owner: 'weijia',
-        repo: 'my-configs',
-        branch: 'master',
-        token: 'your_token',
-      },
-    },
-  ],
-});
+// 首次同步：将本地配置推送到 Gitee
+await repo.flush();
 
-// 同步 .meta/backends.json 到所有后端，让新副本知道拓扑
-await repo.syncMetaToReplicas();
-
-console.log('后端已添加');
+console.log('replica 已添加并同步');
 await repo.dispose();
 ```
 
@@ -836,12 +887,10 @@ import { createConfigRepo } from 'zen-fs-config';
 
 // === 第二次运行（重新连接同一个后端）===
 {
-  // 用相同的参数再次调用 createConfigRepo
-  // createConfigRepo 会读取后端上已有的 /.meta/backends.json，恢复拓扑
-  const repo = await createConfigRepo('my-app', {
-    primaryBackendId: 'local',
-    backendInfo: { type: 'InMemory', options: {} },
-  });
+  // 用相同（或更少）的参数再次调用 createConfigRepo
+  // IndexedDB 是主后端，数据持久保存在浏览器中
+  // createConfigRepo 会读取 IndexedDB 上的 /.meta/backends/ 恢复拓扑
+  const repo = await createConfigRepo('my-app', {});
 
   // load() 会自动将后端上的配置加载到内存缓存
   // 直接读取之前的配置
@@ -852,10 +901,9 @@ import { createConfigRepo } from 'zen-fs-config';
 }
 ```
 
-> **注意**: `InMemory` 后端的数据在 `dispose()` 后就丢失了，上面的示例仅用于演示 API 用法。  
-> 要真正实现"关闭再打开数据还在"，需要使用持久化后端（如 IndexedDB、Gitee）。  
 > 重新连接时，`createConfigRepo` 会自动：
-> 1. 读取 `/.meta/backends.json` 恢复后端拓扑
-> 2. 读取 `/.meta/.node-id` 恢复节点 ID
-> 3. 调用 `load()` 将配置文件加载到内存缓存
-> 4. 如果有副本后端，做一次同步
+> 1. 创建 IndexedDB 主后端（数据持久保存在浏览器中）
+> 2. 读取 `.meta/backends/` 目录恢复后端拓扑
+> 3. 读取 `.meta/.node-id` 恢复节点 ID
+> 4. 调用 `load()` 将配置文件加载到内存缓存
+> 5. 如果有 replica 后端，做一次同步
