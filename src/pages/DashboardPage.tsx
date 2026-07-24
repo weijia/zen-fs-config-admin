@@ -272,6 +272,7 @@ export default function DashboardPage() {
         )}
         {pairs.map(([id, s]) => {
           const r = s.lastResult;
+          const hasActivity = r && (r.filesCreated || r.filesUpdated || r.filesDeleted || r.conflicts?.length || 0) > 0;
           const statusColor = s.state === 'syncing' ? 'var(--warning)'
             : !r ? 'var(--text-muted)'
             : r.filesSkipped > 0 ? 'var(--warning)'
@@ -281,12 +282,13 @@ export default function DashboardPage() {
             : `Last: +${r.filesCreated}/~${r.filesUpdated}/-${r.filesDeleted} in ${r.durationMs}ms`;
 
           return (
-            <div key={id} style={{ marginBottom: 12, padding: 12, background: 'var(--bg-secondary)', borderRadius: 6, borderLeft: `3px solid ${statusColor}` }}>
+            <div key={id} style={{ marginBottom: 16, padding: 12, background: 'var(--bg-secondary)', borderRadius: 6, borderLeft: `3px solid ${statusColor}`, border: hasActivity ? '1px solid var(--warning)' : undefined }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <div>
                   <span className="badge badge-primary">{id}</span>
                   <span style={{ marginLeft: 8, fontSize: 12, color: statusColor, fontWeight: 600 }}>
                     {statusText}
+                    {r ? ` | dir: ${r.direction}` : ''}
                   </span>
                   {s.watching && <span className="badge" style={{ marginLeft: 8, background: 'var(--info)', color: '#fff' }}>watch</span>}
                 </div>
@@ -320,10 +322,43 @@ export default function DashboardPage() {
                   <div style={{ color: r?.filesSkipped ? 'var(--danger)' : 'inherit' }}>{r?.filesSkipped ?? '-'}</div>
                 </div>
                 <div>
-                  <div style={{ color: 'var(--text-muted)' }}>Conflicts</div>
-                  <div style={{ color: r?.conflicts?.length ? 'var(--danger)' : 'inherit' }}>{r?.conflicts?.length ?? '-'}</div>
+                  <div style={{ color: 'var(--text-muted)' }}>Duration</div>
+                  <div>{r?.durationMs ? `${r.durationMs}ms` : '-'}</div>
                 </div>
               </div>
+
+              {/* Changes list */}
+              {r?.changes && r.changes.length > 0 && (
+                <div style={{ marginTop: 8, padding: 8, background: 'var(--bg-tertiary)', borderRadius: 4, fontSize: 11 }}>
+                  <div style={{ color: 'var(--text-muted)', marginBottom: 4 }}>
+                    Changes ({r.changes.length}):
+                  </div>
+                  <div style={{ fontFamily: 'var(--font-mono)', maxHeight: 120, overflow: 'auto' }}>
+                    {r.changes.map((c: any, j: number) => {
+                      const color = c.type === 'Created' ? 'var(--success)' : c.type === 'Modified' ? 'var(--warning)' : 'var(--danger)';
+                      return (
+                        <div key={j} style={{ color }}>
+                          {c.type}: {c.path}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Conflicts */}
+              {r?.conflicts && r.conflicts.length > 0 && (
+                <div style={{ marginTop: 8, padding: 8, background: 'rgba(var(--danger-rgb), 0.1)', borderRadius: 4, fontSize: 11 }}>
+                  <div style={{ color: 'var(--danger)', marginBottom: 4 }}>
+                    Conflicts ({r.conflicts.length}):
+                  </div>
+                  {r.conflicts.map((c: any, j: number) => (
+                    <div key={j} style={{ fontFamily: 'var(--font-mono)' }}>
+                      {c.path} — resolved: {c.resolvedWith}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
