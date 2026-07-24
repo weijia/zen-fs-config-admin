@@ -8,7 +8,7 @@
     "build": "node scripts/generate-version.js && tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "postinstall": "patch-package"
+    "postinstall": "echo 'no patches'"
   },
   "dependencies": {
     "@zenfs/core": "^2.5.7",
@@ -17,7 +17,7 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
     "zen-fs-cache": "^1.0.1",
-    "zen-fs-config": "^0.3.30",
+    "zen-fs-config": "^0.4.0",
     "zen-fs-gitee": "^1.2.1",
     "zen-fs-github": "github:weijia/zen-fs-github#main",
     "zen-fs-remotestoragejs": "^1.2.14",
