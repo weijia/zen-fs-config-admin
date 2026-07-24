@@ -681,3 +681,181 @@ await repo.syncMetaToReplicas();
 // 手动 flush 触发首次同步
 await repo.flush();
 ```
+
+---
+
+## 最简用例（5 个场景）
+
+以下每个场景都是独立的最简示例，展示了 zen-fs-config 的核心生命周期。
+
+### 场景 1：初始化
+
+第一次创建配置仓库。此时后端上什么都没有，`createConfigRepo` 会自动初始化 `/.meta/backends.json`。
+
+```typescript
+import { createConfigRepo } from 'zen-fs-config';
+// ↑ 前提：已在 app 启动时注册了后端类型（如 IndexedDB、Gitee 等）
+
+const repo = await createConfigRepo('my-app', {
+  primaryBackendId: 'local',
+  backendInfo: {
+    type: 'InMemory',       // 用内置的内存后端，最简，无需注册
+    options: {},
+  },
+});
+
+console.log('appId:', repo.appId);       // 'my-app'
+console.log('nodeId:', repo.nodeId);     // 'node-xxx'（自动生成）
+
+await repo.dispose();
+```
+
+> `InMemory` 是唯一不需要 `registerBackend` 的后端。生产环境应该换成持久化后端（IndexedDB、Gitee 等）。
+
+### 场景 2：设置新的配置
+
+写入一条配置，然后读回来。
+
+```typescript
+import { createConfigRepo } from 'zen-fs-config';
+
+const repo = await createConfigRepo('my-app', {
+  primaryBackendId: 'local',
+  backendInfo: { type: 'InMemory', options: {} },
+});
+
+// 写入配置（同步写入内存缓存，后台异步持久化到后端）
+repo.setConfig('/database', { host: 'localhost', port: 5432 });
+
+// 读取配置（同步，从内存缓存读）
+const db = repo.getConfig<{ host: string; port: number }>('/database');
+console.log(db.host); // 'localhost'
+
+// 也可以用 fs API 直接读文件
+const raw = await repo.fs.promises.readFile('/database.json', 'utf-8');
+console.log(JSON.parse(raw).port); // 5432
+
+await repo.dispose();
+```
+
+### 场景 3：增加数据后端
+
+在已有主后端的基础上，添加一个 Gitee 作为副本后端，实现数据冗余。
+
+```typescript
+import { createConfigRepo } from 'zen-fs-config';
+
+const repo = await createConfigRepo('my-app', {
+  primaryBackendId: 'local',
+  backendInfo: { type: 'InMemory', options: {} },
+});
+
+// 先写入一些配置
+repo.setConfig('/database', { host: 'localhost', port: 5432 });
+
+// 读取当前后端拓扑
+const meta = await repo.getBackends();
+console.log('当前后端:', meta!.backends.map(b => b.id)); // ['local']
+
+// 添加 Gitee 副本
+await repo.updateBackends({
+  version: 1,
+  backends: [
+    ...meta!.backends,
+    {
+      id: 'gitee-backup',
+      type: 'Gitee',
+      options: {
+        owner: 'weijia',
+        repo: 'my-configs',
+        branch: 'master',
+        token: 'your_token',
+      },
+    },
+  ],
+});
+
+// 同步 .meta/backends.json 到所有后端，让新副本知道拓扑
+await repo.syncMetaToReplicas();
+
+console.log('后端已添加');
+await repo.dispose();
+```
+
+### 场景 4：自动同步
+
+配置写入后，数据会自动同步到所有副本后端。
+
+```typescript
+import { createConfigRepo } from 'zen-fs-config';
+
+const repo = await createConfigRepo('my-app', {
+  primaryBackendId: 'local',
+  backendInfo: { type: 'InMemory', options: {} },
+});
+
+// 假设已经添加了 Gitee 副本（见场景 3）
+
+// 写入新配置 → 自动触发后台持久化到主后端
+repo.setConfig('/feature-flags', { newUI: true, beta: false });
+
+// 手动触发同步，将主后端的变更推送到所有副本
+const results = await repo.flush();
+for (const r of results) {
+  console.log(`${r.pairId}: +${r.filesCreated} ~${r.filesUpdated} -${r.filesDeleted}`);
+  // 输出示例: local→gitee-backup: +1 ~0 -0
+}
+
+// 查看同步状态
+const statuses = repo.getSyncStatuses();
+for (const [pairId, status] of statuses) {
+  console.log(`${pairId}: state=${status.state}, totalSyncs=${status.totalSyncs}`);
+}
+
+await repo.dispose();
+```
+
+### 场景 5：再次打开时初始化
+
+应用关闭后重新打开，连接到同一个后端，恢复之前的配置。
+
+```typescript
+import { createConfigRepo } from 'zen-fs-config';
+
+// === 第一次运行 ===
+{
+  const repo = await createConfigRepo('my-app', {
+    primaryBackendId: 'local',
+    backendInfo: { type: 'InMemory', options: {} },
+  });
+
+  repo.setConfig('/database', { host: 'localhost', port: 5432 });
+
+  await repo.dispose();
+}
+
+// === 第二次运行（重新连接同一个后端）===
+{
+  // 用相同的参数再次调用 createConfigRepo
+  // createConfigRepo 会读取后端上已有的 /.meta/backends.json，恢复拓扑
+  const repo = await createConfigRepo('my-app', {
+    primaryBackendId: 'local',
+    backendInfo: { type: 'InMemory', options: {} },
+  });
+
+  // load() 会自动将后端上的配置加载到内存缓存
+  // 直接读取之前的配置
+  const db = repo.getConfig<{ host: string; port: number }>('/database');
+  console.log(db); // { host: 'localhost', port: 5432 }
+
+  await repo.dispose();
+}
+```
+
+> **注意**: `InMemory` 后端的数据在 `dispose()` 后就丢失了，上面的示例仅用于演示 API 用法。  
+> 要真正实现"关闭再打开数据还在"，需要使用持久化后端（如 IndexedDB、Gitee）。  
+> 重新连接时，`createConfigRepo` 会自动：
+> 1. 读取 `/.meta/backends.json` 恢复后端拓扑
+> 2. 读取 `/.meta/.node-id` 恢复节点 ID
+> 3. 调用 `load()` 将配置文件加载到内存缓存
+> 4. 如果有副本后端，做一次同步
