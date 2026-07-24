@@ -1,15 +1,15 @@
 {
-  "version": "main-00507a7",
-  "buildTime": "2026/07/24 13:27:47",
-  "sha": "00507a7",
+  "version": "main-d0255af",
+  "buildTime": "2026/07/24 13:43:04",
+  "sha": "d0255af",
   "branch": "main",
   "tag": "",
   "deps": {
-    "zen-fs-config": "unknown",
-    "zen-fs-sync": "unknown",
-    "zen-fs-remotestoragejs": "unknown",
-    "zen-fs-cache": "unknown",
-    "@zenfs/core": "unknown",
-    "@zenfs/dom": "unknown"
+    "zen-fs-config": "0.3.30",
+    "zen-fs-sync": "0.4.0",
+    "zen-fs-remotestoragejs": "1.2.14",
+    "zen-fs-cache": "1.0.1",
+    "@zenfs/core": "2.5.7",
+    "@zenfs/dom": "1.2.9"
   }
 }

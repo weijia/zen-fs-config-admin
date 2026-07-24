@@ -282,6 +282,9 @@ export default function DashboardPage() {
           const statusText = s.state === 'syncing' ? 'Syncing...'
             : !r ? 'Not synced yet'
             : `Last: +${r.filesCreated}/~${r.filesUpdated}/-${r.filesDeleted} in ${r.durationMs}ms`;
+          const lastCheckTime = (s as any).lastCheckTime
+            ? new Date((s as any).lastCheckTime).toLocaleString()
+            : '';
           const lastSyncTime = r?.timestamp
             ? new Date(r.timestamp).toLocaleString()
             : '';
@@ -300,12 +303,13 @@ export default function DashboardPage() {
                     {statusText}
                   </span>
                   {s.watching && <span className="badge" style={{ marginLeft: 8, background: 'var(--info)', color: '#fff' }}>watch</span>}
-                  {lastSyncTime && (
-                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)' }}>
-                      {lastSyncTime}
-                    </span>
-                  )}
                 </div>
+                {(lastCheckTime || lastSyncTime) && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, display: 'flex', gap: 16 }}>
+                    {lastCheckTime && <span>Last Check: {lastCheckTime}</span>}
+                    {lastSyncTime && <span>Last Sync: {lastSyncTime}</span>}
+                  </div>
+                )}
                 <button
                   className="btn btn-sm btn-secondary"
                   onClick={() => handleSyncPair(id)}
