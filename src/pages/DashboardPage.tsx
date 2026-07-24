@@ -282,6 +282,9 @@ export default function DashboardPage() {
           const statusText = s.state === 'syncing' ? 'Syncing...'
             : !r ? 'Not synced yet'
             : `Last: +${r.filesCreated}/~${r.filesUpdated}/-${r.filesDeleted} in ${r.durationMs}ms`;
+          const lastSyncTime = r?.timestamp
+            ? new Date(r.timestamp).toLocaleString()
+            : '';
 
           return (
             <div key={id} style={{ marginBottom: 16, padding: 12, background: 'var(--bg-secondary)', borderRadius: 6, borderLeft: `3px solid ${statusColor}`, border: hasActivity ? '1px solid var(--warning)' : undefined }}>
@@ -297,6 +300,11 @@ export default function DashboardPage() {
                     {statusText}
                   </span>
                   {s.watching && <span className="badge" style={{ marginLeft: 8, background: 'var(--info)', color: '#fff' }}>watch</span>}
+                  {lastSyncTime && (
+                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+                      {lastSyncTime}
+                    </span>
+                  )}
                 </div>
                 <button
                   className="btn btn-sm btn-secondary"
