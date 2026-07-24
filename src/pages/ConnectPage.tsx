@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import type { ConfigRepoOptions } from 'zen-fs-config';
-import { BACKEND_TYPES, getBackendTypeDef } from '../backend-types';
+import { getBackendTypeDef, getBackendTypes } from '../backend-types';
 import { deserializeBackend } from '../backend-config-string';
 import { versionDisplay, buildTimeDisplay } from '../version';
 
@@ -176,7 +176,7 @@ export default function ConnectPage() {
               <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <label className="form-label" style={{ margin: 0, whiteSpace: 'nowrap' }}>Type</label>
                 <select className="form-input" value={entry.type} onChange={e => updateBackend(index, { type: e.target.value })} style={{ flex: 1 }}>
-                  {BACKEND_TYPES.map(bt => <option key={bt.type} value={bt.type}>{bt.icon} {bt.label}</option>)}
+                  {getBackendTypes().map(bt => <option key={bt.type} value={bt.type}>{bt.icon} {bt.label}</option>)}
                 </select>
                 <label className="form-label" style={{ margin: 0, whiteSpace: 'nowrap' }}>ID</label>
                 <input className="form-input" value={entry.id} onChange={e => { const next = [...backends]; next[index] = { ...next[index], id: e.target.value }; setBackends(next); }} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />

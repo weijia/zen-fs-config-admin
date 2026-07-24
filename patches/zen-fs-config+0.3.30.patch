@@ -1,0 +1,270 @@
+diff --git a/node_modules/zen-fs-config/dist/index.d.mts b/node_modules/zen-fs-config/dist/index.d.mts
+index bed0e33..5957d65 100644
+--- a/node_modules/zen-fs-config/dist/index.d.mts
++++ b/node_modules/zen-fs-config/dist/index.d.mts
+@@ -242,11 +242,33 @@ interface BackendInstance {
+     readFileMeta?(path: string, opts?: any): Promise<any>;
+     getRevision?(path: string): Promise<string | number | undefined>;
+ }
+-declare function registerBackend(type: string, factory: BackendFactory): void;
++
++/** Parameter field definition for backend metadata. */
++export interface BackendParamDef {
++  key: string;
++  label: string;
++  type: 'text' | 'password' | 'select';
++  placeholder?: string;
++  required?: boolean;
++  options?: { value: string; label: string }[];
++}
++
++/** Metadata describing a registered backend type (for UI forms). */
++export interface BackendMetadata {
++  type: string;
++  label: string;
++  icon: string;
++  fields: BackendParamDef[];
++  defaultOptions: Record<string, string>;
++}
++
++declare function registerBackend(type: string, factory: BackendFactory, metadata?: BackendMetadata): void;
+ declare function unregisterBackend(type: string): boolean;
+ declare function createBackend(descriptor: Pick<BackendDescriptor, 'type' | 'options'>): Promise<BackendInstance>;
+ declare function hasBackend(type: string): boolean;
+ declare function listBackends(): string[];
++declare function getBackendMetadata(type: string): BackendMetadata | undefined;
++declare function listBackendMetadata(): BackendMetadata[];
+ declare function wrapZenFSFileSystem(config: any): Promise<BackendInstance>;
+ 
+ /**
+@@ -379,4 +401,5 @@ declare function incrementVersion(fs: SyncableFS, configFilePath: string, newCon
+  */
+ declare function verifyOrRepairVersion(fs: SyncableFS, configFilePath: string, author: string): Promise<VersionMeta | null>;
+ 
+-export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getExtension, hasBackend, incrementVersion, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
++export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getBackendMetadata, getExtension, hasBackend, incrementVersion, listBackendMetadata, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
++export type { BackendMetadata, BackendParamDef };
+diff --git a/node_modules/zen-fs-config/dist/index.d.ts b/node_modules/zen-fs-config/dist/index.d.ts
+index bed0e33..5957d65 100644
+--- a/node_modules/zen-fs-config/dist/index.d.ts
++++ b/node_modules/zen-fs-config/dist/index.d.ts
+@@ -242,11 +242,33 @@ interface BackendInstance {
+     readFileMeta?(path: string, opts?: any): Promise<any>;
+     getRevision?(path: string): Promise<string | number | undefined>;
+ }
+-declare function registerBackend(type: string, factory: BackendFactory): void;
++
++/** Parameter field definition for backend metadata. */
++export interface BackendParamDef {
++  key: string;
++  label: string;
++  type: 'text' | 'password' | 'select';
++  placeholder?: string;
++  required?: boolean;
++  options?: { value: string; label: string }[];
++}
++
++/** Metadata describing a registered backend type (for UI forms). */
++export interface BackendMetadata {
++  type: string;
++  label: string;
++  icon: string;
++  fields: BackendParamDef[];
++  defaultOptions: Record<string, string>;
++}
++
++declare function registerBackend(type: string, factory: BackendFactory, metadata?: BackendMetadata): void;
+ declare function unregisterBackend(type: string): boolean;
+ declare function createBackend(descriptor: Pick<BackendDescriptor, 'type' | 'options'>): Promise<BackendInstance>;
+ declare function hasBackend(type: string): boolean;
+ declare function listBackends(): string[];
++declare function getBackendMetadata(type: string): BackendMetadata | undefined;
++declare function listBackendMetadata(): BackendMetadata[];
+ declare function wrapZenFSFileSystem(config: any): Promise<BackendInstance>;
+ 
+ /**
+@@ -379,4 +401,5 @@ declare function incrementVersion(fs: SyncableFS, configFilePath: string, newCon
+  */
+ declare function verifyOrRepairVersion(fs: SyncableFS, configFilePath: string, author: string): Promise<VersionMeta | null>;
+ 
+-export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getExtension, hasBackend, incrementVersion, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
++export { type BackendDescriptor, type BackendFactory, type BackendInstance, type BackendsMeta, type CacheOptions, ConfigRepo, type ConfigRepoOptions, type ConfigSerializer, type ConflictArchive, type ConflictInfo, type IConfigRepo, type TombstoneMeta, type VersionMeta, configKeyToFilePath, createBackend, createConfigRepo, createSerializerChain, getBackendMetadata, getExtension, hasBackend, incrementVersion, listBackendMetadata, listBackends, readVersion, registerBackend, sha256, unregisterBackend, verifyOrRepairVersion, versionPathFor, wrapZenFSFileSystem, writeVersion };
++export type { BackendMetadata, BackendParamDef };
+diff --git a/node_modules/zen-fs-config/dist/index.js b/node_modules/zen-fs-config/dist/index.js
+index e8c878e..c216cf4 100644
+--- a/node_modules/zen-fs-config/dist/index.js
++++ b/node_modules/zen-fs-config/dist/index.js
+@@ -272,10 +272,15 @@ function backendToSyncableFS(backend, name) {
+ 
+ // src/backend-registry.ts
+ var registry = /* @__PURE__ */ new Map();
+-function registerBackend(type, factory) {
++var metadataRegistry = /* @__PURE__ */ new Map();
++function registerBackend(type, factory, metadata) {
+   registry.set(type, factory);
++  if (metadata) {
++    metadataRegistry.set(type, metadata);
++  }
+ }
+ function unregisterBackend(type) {
++  metadataRegistry.delete(type);
+   return registry.delete(type);
+ }
+ async function createBackend(descriptor) {
+@@ -293,6 +298,12 @@ function hasBackend(type) {
+ function listBackends() {
+   return Array.from(registry.keys());
+ }
++function getBackendMetadata(type) {
++  return metadataRegistry.get(type);
++}
++function listBackendMetadata() {
++  return Array.from(metadataRegistry.values());
++}
+ async function wrapZenFSFileSystem(config) {
+   const zenfs = await import("@zenfs/core");
+   const isolatedFS = await zenfs.resolveMountConfig(config);
+@@ -1022,8 +1033,23 @@ var ConfigRepo = class {
+     return results;
+   }
+   async writeMetaFile(path, data) {
+-    await this.ensureDir(path);
+     const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
++    const newContent = new TextDecoder().decode(bytes);
++
++    // Skip if content hasn't changed
++    try {
++      const existing = await this.cachedFS.readFile(path);
++      const existingStr = typeof existing === 'string'
++        ? existing
++        : new TextDecoder().decode(toUint8Array(existing));
++      if (existingStr === newContent) {
++        return;
++      }
++    } catch {
++      // File doesn't exist yet, proceed with write
++    }
++
++    await this.ensureDir(path);
+     await this.cachedFS.writeFile(path, bytes);
+     const author = `${this.appId}/${this.nodeId}`;
+     const version = await incrementVersion(this.fullFS, path, bytes, author);
+@@ -1074,9 +1100,15 @@ async function createConfigRepo(appId, options) {
+     type: options.backendInfo.type,
+     options: options.backendInfo.options
+   });
+-  const cachedFS = primaryInstance;
++  let cachedFS = primaryInstance;
++  if (options.cache) {
++    const { CachedFileSystem, MemoryCacheStore, IdbCacheStore } = await import("zen-fs-cache");
++    const store = options.cache.storeType === "IdbCacheStore" ? new IdbCacheStore(options.cache.storePrefix) : new MemoryCacheStore();
++    cachedFS = new CachedFileSystem(primaryInstance, store, { ttlMs: options.cache.ttlMs ?? 0 });
++    console.log(`[createConfigRepo] Cache enabled: ${options.cache.storeType ?? "MemoryCacheStore"}, ttlMs=${options.cache.ttlMs ?? 0}`);
++  }
+   try {
+-    await primaryInstance.mkdir(META_DIR);
++    await cachedFS.mkdir(META_DIR);
+     console.log(`[createConfigRepo] /.meta/ ready`);
+   } catch (err) {
+     console.error(`[createConfigRepo] Failed to ensure /.meta/:`, err.message);
+@@ -1161,9 +1193,11 @@ async function createConfigRepo(appId, options) {
+   createBackend,
+   createConfigRepo,
+   createSerializerChain,
++  getBackendMetadata,
+   getExtension,
+   hasBackend,
+   incrementVersion,
++  listBackendMetadata,
+   listBackends,
+   readVersion,
+   registerBackend,
+diff --git a/node_modules/zen-fs-config/dist/index.mjs b/node_modules/zen-fs-config/dist/index.mjs
+index 85407da..bcf74bb 100644
+--- a/node_modules/zen-fs-config/dist/index.mjs
++++ b/node_modules/zen-fs-config/dist/index.mjs
+@@ -223,10 +223,15 @@ function backendToSyncableFS(backend, name) {
+ 
+ // src/backend-registry.ts
+ var registry = /* @__PURE__ */ new Map();
+-function registerBackend(type, factory) {
++var metadataRegistry = /* @__PURE__ */ new Map();
++function registerBackend(type, factory, metadata) {
+   registry.set(type, factory);
++  if (metadata) {
++    metadataRegistry.set(type, metadata);
++  }
+ }
+ function unregisterBackend(type) {
++  metadataRegistry.delete(type);
+   return registry.delete(type);
+ }
+ async function createBackend(descriptor) {
+@@ -244,6 +249,12 @@ function hasBackend(type) {
+ function listBackends() {
+   return Array.from(registry.keys());
+ }
++function getBackendMetadata(type) {
++  return metadataRegistry.get(type);
++}
++function listBackendMetadata() {
++  return Array.from(metadataRegistry.values());
++}
+ async function wrapZenFSFileSystem(config) {
+   const zenfs = await import("@zenfs/core");
+   const isolatedFS = await zenfs.resolveMountConfig(config);
+@@ -973,8 +984,23 @@ var ConfigRepo = class {
+     return results;
+   }
+   async writeMetaFile(path, data) {
+-    await this.ensureDir(path);
+     const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
++    const newContent = new TextDecoder().decode(bytes);
++
++    // Skip if content hasn't changed
++    try {
++      const existing = await this.cachedFS.readFile(path);
++      const existingStr = typeof existing === 'string'
++        ? existing
++        : new TextDecoder().decode(toUint8Array(existing));
++      if (existingStr === newContent) {
++        return;
++      }
++    } catch {
++      // File doesn't exist yet, proceed with write
++    }
++
++    await this.ensureDir(path);
+     await this.cachedFS.writeFile(path, bytes);
+     const author = `${this.appId}/${this.nodeId}`;
+     const version = await incrementVersion(this.fullFS, path, bytes, author);
+@@ -1025,9 +1051,15 @@ async function createConfigRepo(appId, options) {
+     type: options.backendInfo.type,
+     options: options.backendInfo.options
+   });
+-  const cachedFS = primaryInstance;
++  let cachedFS = primaryInstance;
++  if (options.cache) {
++    const { CachedFileSystem, MemoryCacheStore, IdbCacheStore } = await import("zen-fs-cache");
++    const store = options.cache.storeType === "IdbCacheStore" ? new IdbCacheStore(options.cache.storePrefix) : new MemoryCacheStore();
++    cachedFS = new CachedFileSystem(primaryInstance, store, { ttlMs: options.cache.ttlMs ?? 0 });
++    console.log(`[createConfigRepo] Cache enabled: ${options.cache.storeType ?? "MemoryCacheStore"}, ttlMs=${options.cache.ttlMs ?? 0}`);
++  }
+   try {
+-    await primaryInstance.mkdir(META_DIR);
++    await cachedFS.mkdir(META_DIR);
+     console.log(`[createConfigRepo] /.meta/ ready`);
+   } catch (err) {
+     console.error(`[createConfigRepo] Failed to ensure /.meta/:`, err.message);
+@@ -1111,9 +1143,11 @@ export {
+   createBackend,
+   createConfigRepo,
+   createSerializerChain,
++  getBackendMetadata,
+   getExtension,
+   hasBackend,
+   incrementVersion,
++  listBackendMetadata,
+   listBackends,
+   readVersion,
+   registerBackend,

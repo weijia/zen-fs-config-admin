@@ -6,7 +6,7 @@
  * app decides to bundle.
  *
  * Adding a new backend?  Just add another registerBackend() call here
- * and update backend-types.ts — no changes needed to zen-fs-config.
+ * and pass the metadata as the 3rd argument — no changes needed to zen-fs-config.
  */
 
 import { registerBackend, wrapZenFSFileSystem } from 'zen-fs-config';
@@ -23,6 +23,14 @@ registerBackend('IndexedDB', async (options) => {
   const storeName = (options.storeName as string) ?? `zen-fs-config-${++idbCounter}`;
 
   return wrapZenFSFileSystem({ backend: IndexedDB, storeName });
+}, {
+  type: 'IndexedDB',
+  label: 'IndexedDB',
+  icon: '\u{1F4BE}',
+  fields: [
+    { key: 'storeName', label: 'Store Name', type: 'text', placeholder: 'zen-fs-config-1' },
+  ],
+  defaultOptions: { storeName: '' },
 });
 
 // ---------------------------------------------------------------------------
@@ -42,6 +50,17 @@ registerBackend('WebStorage', async (options) => {
   }
 
   return wrapZenFSFileSystem({ backend: WebStorage, storage });
+}, {
+  type: 'WebStorage',
+  label: 'WebStorage',
+  icon: '\u{1F4BE}',
+  fields: [
+    { key: 'storageType', label: 'Storage Type', type: 'select', options: [
+      { value: 'localStorage', label: 'localStorage' },
+      { value: 'sessionStorage', label: 'sessionStorage' },
+    ]},
+  ],
+  defaultOptions: { storageType: 'localStorage' },
 });
 
 // ---------------------------------------------------------------------------
@@ -58,142 +77,46 @@ registerBackend('GitHub', async (options) => {
     branch: options.branch,
     baseUrl: (options.baseUrl && (options.baseUrl as string).trim()) || undefined,
   });
+}, {
+  type: 'GitHub',
+  label: 'GitHub',
+  icon: '\u{1F419}',
+  fields: [
+    { key: 'owner', label: 'Owner', type: 'text', placeholder: 'weijia', required: true },
+    { key: 'repo', label: 'Repo', type: 'text', placeholder: 'my-configs', required: true },
+    { key: 'branch', label: 'Branch', type: 'text', placeholder: 'main' },
+    { key: 'token', label: 'Token', type: 'password', placeholder: 'ghp_xxxx' },
+    { key: 'baseUrl', label: 'API URL', type: 'text', placeholder: 'https://api.github.com' },
+  ],
+  defaultOptions: { owner: '', repo: '', branch: 'main', token: '', baseUrl: '' },
 });
 
 // ---------------------------------------------------------------------------
 // Gitee
-//
-// Gitee's /git/trees/{sha} requires a SHA, not a branch name (unlike GitHub).
-// We patch GiteeFS.prototype.init so that after indexing it resolves the
-// branch name to a tree SHA on the first 404.
 // ---------------------------------------------------------------------------
 
 registerBackend('Gitee', async (options) => {
-  const zenGitee = await import('zen-fs-gitee');
-
-  const { GiteeFS } = zenGitee as any;
-  const origInit = GiteeFS.prototype.init;
-
-  // Use a WeakSet to avoid double-patching
-  const patched = new WeakSet();
-  GiteeFS.prototype.init = async function (this: any) {
-    let firstErr: any;
-    try {
-      return await origInit.call(this);
-    } catch (err: any) {
-      if (!err.message?.includes('404') && !err.message?.includes('Tree not found')) {
-        throw err;
-      }
-      firstErr = err;
-    }
-    // getTree inside init() failed — resolve branch → SHA and retry
-    if (patched.has(this)) throw firstErr;
-    patched.add(this);
-
-    console.log(`[Gitee] init failed with branch="${this.api.branch}", resolving to SHA...`);
-    const baseUrl = this.api.baseUrl || 'https://gitee.com/api/v5';
-    const auth = `access_token=${this.api.token}`;
-
-    // GET /repos/{owner}/{repo}/branches/{branch} → commit.sha
-    const branchUrl = `${baseUrl}/repos/${this.api.owner}/${this.api.repo}/branches/${this.api.branch}?${auth}`;
-    let branchRes = await fetch(branchUrl);
-    let branchData: any;
-
-    if (branchRes.ok) {
-      branchData = await branchRes.json();
-    } else {
-      // Branch doesn't exist — create it from the default branch (master/main)
-      console.log(`[Gitee] Branch "${this.api.branch}" not found, creating...`);
-      const defaultBranch = this.api.branch === 'master' ? 'main' : 'master';
-
-      // Find the default branch's SHA
-      let defaultSha: string | undefined;
-      for (const name of [defaultBranch, 'main', 'master']) {
-        const dr = await fetch(`${baseUrl}/repos/${this.api.owner}/${this.api.repo}/branches/${name}?${auth}`);
-        if (dr.ok) {
-          const dd: any = await dr.json();
-          defaultSha = dd.commit?.sha;
-          if (defaultSha) break;
-        }
-      }
-
-      if (!defaultSha) {
-        // No branches at all — repo is empty. We must create an initial file
-        // via the Contents API to implicitly create the branch.
-        // Gitee has no POST /git/refs endpoint, so we cannot create a branch
-        // from thin air; we need at least one commit.
-        console.log(`[Gitee] No branches found in repo, creating initial file to bootstrap branch "${this.api.branch}"...`);
-        const initRes = await fetch(
-          `${baseUrl}/repos/${this.api.owner}/${this.api.repo}/contents/.gitkeep?branch=${this.api.branch}&${auth}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              content: btoa('init\n'),
-              message: `Initialize branch '${this.api.branch}'`,
-            }),
-          }
-        );
-        if (!initRes.ok) {
-          const errText = await initRes.text().catch(() => '');
-          throw new Error(`Gitee: failed to bootstrap empty repo: ${initRes.status} ${errText}`);
-        }
-        // After creating the initial file, the branch exists. Retry tree init.
-        this.initialized = false;
-        return origInit.call(this);
-      }
-
-      // POST /repos/{owner}/{repo}/branches to create branch
-      const createRes = await fetch(`${baseUrl}/repos/${this.api.owner}/${this.api.repo}/branches?${auth}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          refs: defaultSha,
-          branch_name: this.api.branch,
-        }),
-      });
-
-      if (!createRes.ok) {
-        const errText = await createRes.text().catch(() => '');
-        throw new Error(`Gitee: failed to create branch "${this.api.branch}": ${createRes.status} ${errText}`);
-      }
-
-      branchData = await createRes.json();
-      console.log(`[Gitee] Branch "${this.api.branch}" created from ${defaultSha.slice(0, 8)}`);
-    }
-
-    const commitSha = branchData.commit?.sha;
-    if (!commitSha) throw new Error(`Gitee: could not get commit SHA for branch "${this.api.branch}"`);
-
-    // GET /repos/{owner}/{repo}/git/commits/{sha} → tree.sha
-    const commitUrl = `${baseUrl}/repos/${this.api.owner}/${this.api.repo}/git/commits/${commitSha}?${auth}`;
-    const commitRes = await fetch(commitUrl);
-    if (!commitRes.ok) throw new Error(`Gitee: commit ${commitSha} not found (${commitRes.status})`);
-    const commitData: any = await commitRes.json();
-    const treeSha = commitData.tree?.sha;
-    if (!treeSha) throw new Error(`Gitee: could not get tree SHA from commit ${commitSha}`);
-
-    // Replace branch with tree SHA so getTree() succeeds
-    const realBranch = this.api.branch;
-    this.api.branch = treeSha;
-    console.log(`[Gitee] Resolved branch="${realBranch}" → commit=${commitSha.slice(0, 8)} → tree=${treeSha.slice(0, 8)}`);
-
-    try {
-      return await origInit.call(this);
-    } finally {
-      // Restore original branch name for other API calls (getContents, getRaw, etc.)
-      this.api.branch = realBranch;
-    }
-  };
-
+  const { Gitee } = await import('zen-fs-gitee');
   return wrapZenFSFileSystem({
-    backend: zenGitee.Gitee,
+    backend: Gitee,
     token: options.token,
     owner: options.owner,
     repo: options.repo,
     branch: options.branch,
     baseUrl: (options.baseUrl && (options.baseUrl as string).trim()) || undefined,
   });
+}, {
+  type: 'Gitee',
+  label: 'Gitee',
+  icon: '\u{1F98A}',
+  fields: [
+    { key: 'owner', label: 'Owner', type: 'text', placeholder: 'weijia', required: true },
+    { key: 'repo', label: 'Repo', type: 'text', placeholder: 'my-configs', required: true },
+    { key: 'branch', label: 'Branch', type: 'text', placeholder: 'master' },
+    { key: 'token', label: 'Token', type: 'password', placeholder: 'gitee token' },
+    { key: 'baseUrl', label: 'API URL', type: 'text', placeholder: 'https://gitee.com/api/v5' },
+  ],
+  defaultOptions: { owner: '', repo: '', branch: 'master', token: '', baseUrl: '' },
 });
 
 // ---------------------------------------------------------------------------
@@ -323,6 +246,17 @@ registerBackend('WebDAV', async (options) => {
   };
 
   return backend;
+}, {
+  type: 'WebDAV',
+  label: 'WebDAV',
+  icon: '\u{2601}\u{FE0F}',
+  fields: [
+    { key: 'url', label: 'URL', type: 'text', placeholder: 'https://dav.example.com/remote.php/dav/files/', required: true },
+    { key: 'username', label: 'Username', type: 'text', placeholder: 'admin' },
+    { key: 'password', label: 'Password', type: 'password' },
+    { key: 'rootPath', label: 'Root Path', type: 'text', placeholder: '/zen-fs-config/' },
+  ],
+  defaultOptions: { url: '', username: '', password: '', rootPath: '/' },
 });
 
 // ---------------------------------------------------------------------------
@@ -373,4 +307,14 @@ registerBackend('RemoteStorage', async (options) => {
       await fsAny.rename(oldPath, newPath);
     },
   };
+}, {
+  type: 'RemoteStorage',
+  label: 'RemoteStorage',
+  icon: '\u{1F4E1}',
+  fields: [
+    { key: 'href', label: 'User Address (href)', type: 'text', placeholder: 'user@5apps.com', required: true },
+    { key: 'token', label: 'Bearer Token', type: 'password', placeholder: 'rs-xxxxxxxx', required: true },
+    { key: 'basePath', label: 'Base Path', type: 'text', placeholder: '/zen-fs-config/' },
+  ],
+  defaultOptions: { href: '', token: '', basePath: '/' },
 });

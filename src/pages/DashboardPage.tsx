@@ -14,14 +14,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!repo) return;
-    const timer = setInterval(() => setRefreshKey(k => k + 1), 3000);
-    return () => clearInterval(timer);
-  }, [repo]);
-
-  useEffect(() => {
-    if (!repo) return;
     repo.listConflicts().then(setConflicts).catch(() => {});
-  }, [repo, refreshKey]);
+  }, [repo]);
 
   // Log sync status changes every 3s
   useEffect(() => {
@@ -61,6 +55,7 @@ export default function DashboardPage() {
       const results = await repo.flush();
       console.log('[sync-data] flush done, results:', JSON.stringify(results));
       setFlushResult(results);
+      repo.listConflicts().then(setConflicts).catch(() => {});
     } catch (err) {
       console.error('[sync-data] flush failed:', err);
     } finally {
@@ -77,6 +72,7 @@ export default function DashboardPage() {
       console.log('[sync-data] manual sync start:', pairId);
       const result = await engine.sync(pairId);
       console.log('[sync-data] manual sync done:', pairId, result);
+      repo.listConflicts().then(setConflicts).catch(() => {});
     } catch (err) {
       console.error('[sync-data] manual sync failed:', pairId, err);
     } finally {
@@ -171,6 +167,7 @@ export default function DashboardPage() {
         console.log(`[diag] force full sync done: ${pairId}`, result);
       }
       setRefreshKey(k => k + 1);
+      repo.listConflicts().then(setConflicts).catch(() => {});
     } catch (err) {
       console.error('[diag] force full sync failed:', err);
     } finally {

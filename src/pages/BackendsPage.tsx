@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import type { BackendDescriptor, BackendsMeta } from 'zen-fs-config';
-import { BACKEND_TYPES, getBackendTypeDef } from '../backend-types';
+import { getBackendTypeDef, getBackendTypes } from '../backend-types';
 import { serializeBackend, deserializeBackend } from '../backend-config-string';
 
 export default function BackendsPage() {
@@ -222,7 +222,7 @@ export default function BackendsPage() {
             <div className="form-group">
               <label className="form-label">Type</label>
               <select className="form-input" value={formState.type} onChange={e => changeType(e.target.value)} disabled={!isNew}>
-                {BACKEND_TYPES.map(bt => <option key={bt.type} value={bt.type}>{bt.icon} {bt.label}</option>)}
+                {getBackendTypes().map(bt => <option key={bt.type} value={bt.type}>{bt.icon} {bt.label}</option>)}
               </select>
             </div>
 
