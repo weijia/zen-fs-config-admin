@@ -129,7 +129,7 @@ registerBackend('Gitee', async (options) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              content: btoa(''),
+              content: btoa('init\n'),
               message: `Initialize branch '${this.api.branch}'`,
             }),
           }
