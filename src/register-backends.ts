@@ -69,7 +69,7 @@ registerBackend('WebStorage', async (options) => {
 
 registerBackend('GitHub', async (options) => {
   const { Github } = await import('zen-fs-github');
-  return wrapZenFSFileSystem({
+  const backend = wrapZenFSFileSystem({
     backend: Github,
     token: options.token,
     owner: options.owner,
@@ -77,6 +77,34 @@ registerBackend('GitHub', async (options) => {
     branch: options.branch,
     baseUrl: (options.baseUrl && (options.baseUrl as string).trim()) || undefined,
   });
+
+  // Lightweight change detection: compare branch HEAD SHA
+  const owner = options.owner as string;
+  const repo = options.repo as string;
+  const branch = (options.branch as string) || 'main';
+  const token = options.token as string;
+  const baseUrl = String(options.baseUrl ?? '').trim() || 'https://api.github.com';
+  let lastSha: string | undefined;
+
+  (backend as any).checkForUpdates = async (): Promise<boolean> => {
+    try {
+      const url = `${baseUrl.replace(/\/$/, '')}/repos/${owner}/${repo}/branches/${branch}`;
+      const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(url, { headers });
+      if (!res.ok) return true;
+      const data = await res.json();
+      const sha = data?.commit?.sha;
+      if (!sha) return true;
+      if (sha === lastSha) return false;
+      lastSha = sha;
+      return true;
+    } catch {
+      return true;
+    }
+  };
+
+  return backend;
 }, {
   type: 'GitHub',
   label: 'GitHub',
@@ -97,7 +125,7 @@ registerBackend('GitHub', async (options) => {
 
 registerBackend('Gitee', async (options) => {
   const { Gitee } = await import('zen-fs-gitee');
-  return wrapZenFSFileSystem({
+  const backend = wrapZenFSFileSystem({
     backend: Gitee,
     token: options.token,
     owner: options.owner,
@@ -105,6 +133,34 @@ registerBackend('Gitee', async (options) => {
     branch: options.branch,
     baseUrl: (options.baseUrl && (options.baseUrl as string).trim()) || undefined,
   });
+
+  // Lightweight change detection: compare branch HEAD SHA
+  const owner = options.owner as string;
+  const repo = options.repo as string;
+  const branch = (options.branch as string) || 'master';
+  const token = options.token as string;
+  const baseUrl = String(options.baseUrl ?? '').trim() || 'https://gitee.com/api/v5';
+  let lastSha: string | undefined;
+
+  (backend as any).checkForUpdates = async (): Promise<boolean> => {
+    try {
+      const url = `${baseUrl.replace(/\/$/, '')}/repos/${owner}/${repo}/branches/${branch}`;
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `token ${token}`;
+      const res = await fetch(url, { headers });
+      if (!res.ok) return true;
+      const data = await res.json();
+      const sha = data?.commit?.sha;
+      if (!sha) return true;
+      if (sha === lastSha) return false;
+      lastSha = sha;
+      return true;
+    } catch {
+      return true;
+    }
+  };
+
+  return backend;
 }, {
   type: 'Gitee',
   label: 'Gitee',
