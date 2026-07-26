@@ -78,26 +78,36 @@ registerBackend('GitHub', async (options) => {
     baseUrl: (options.baseUrl && (options.baseUrl as string).trim()) || undefined,
   });
 
-  // Lightweight change detection: compare branch HEAD SHA
+  // shouldSync: 通过 tree SHA 检测远端变更（2 次 API 请求，零误报）
   const owner = options.owner as string;
   const repo = options.repo as string;
   const branch = (options.branch as string) || 'main';
   const token = options.token as string;
   const baseUrl = String(options.baseUrl ?? '').trim() || 'https://api.github.com';
-  let lastSha: string | undefined;
+  const cacheKey = `zen-fs-github-sync:${owner}/${repo}/${branch}`;
 
-  (backend as any).checkForUpdates = async (): Promise<boolean> => {
+  (backend as any).shouldSync = async (): Promise<boolean> => {
     try {
-      const url = `${baseUrl.replace(/\/$/, '')}/repos/${owner}/${repo}/branches/${branch}`;
       const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
-      const res = await fetch(url, { headers });
-      if (!res.ok) return true;
-      const data = await res.json();
-      const sha = data?.commit?.sha;
-      if (!sha) return true;
-      if (sha === lastSha) return false;
-      lastSha = sha;
+      const base = baseUrl.replace(/\/$/, '');
+
+      // 第 1 步：获取 commit SHA
+      const branchRes = await fetch(`${base}/repos/${owner}/${repo}/branches/${branch}`, { headers });
+      if (!branchRes.ok) return true;
+      const commitSha = (await branchRes.json())?.commit?.sha;
+      if (!commitSha) return true;
+
+      // 第 2 步：获取 tree SHA（内容级别精确比对）
+      const commitRes = await fetch(`${base}/repos/${owner}/${repo}/git/commits/${commitSha}`, { headers });
+      if (!commitRes.ok) return true;
+      const treeSha = (await commitRes.json())?.tree?.sha;
+      if (!treeSha) return true;
+
+      // 第 3 步：与 localStorage 缓存比较
+      const cached = localStorage.getItem(cacheKey);
+      if (cached === treeSha) return false;
+      localStorage.setItem(cacheKey, treeSha);
       return true;
     } catch {
       return true;
@@ -134,26 +144,36 @@ registerBackend('Gitee', async (options) => {
     baseUrl: (options.baseUrl && (options.baseUrl as string).trim()) || undefined,
   });
 
-  // Lightweight change detection: compare branch HEAD SHA
+  // shouldSync: 通过 tree SHA 检测远端变更（2 次 API 请求，零误报）
   const owner = options.owner as string;
   const repo = options.repo as string;
   const branch = (options.branch as string) || 'master';
   const token = options.token as string;
   const baseUrl = String(options.baseUrl ?? '').trim() || 'https://gitee.com/api/v5';
-  let lastSha: string | undefined;
+  const cacheKey = `zen-fs-gitee-sync:${owner}/${repo}/${branch}`;
 
-  (backend as any).checkForUpdates = async (): Promise<boolean> => {
+  (backend as any).shouldSync = async (): Promise<boolean> => {
     try {
-      const url = `${baseUrl.replace(/\/$/, '')}/repos/${owner}/${repo}/branches/${branch}`;
+      const base = baseUrl.replace(/\/$/, '');
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `token ${token}`;
-      const res = await fetch(url, { headers });
-      if (!res.ok) return true;
-      const data = await res.json();
-      const sha = data?.commit?.sha;
-      if (!sha) return true;
-      if (sha === lastSha) return false;
-      lastSha = sha;
+
+      // 第 1 步：获取 commit SHA
+      const branchRes = await fetch(`${base}/repos/${owner}/${repo}/branches/${branch}`, { headers });
+      if (!branchRes.ok) return true;
+      const commitSha = (await branchRes.json())?.commit?.sha;
+      if (!commitSha) return true;
+
+      // 第 2 步：获取 tree SHA（内容级别精确比对）
+      const commitRes = await fetch(`${base}/repos/${owner}/${repo}/git/commits/${commitSha}`, { headers });
+      if (!commitRes.ok) return true;
+      const treeSha = (await commitRes.json())?.tree?.sha;
+      if (!treeSha) return true;
+
+      // 第 3 步：与 localStorage 缓存比较
+      const cached = localStorage.getItem(cacheKey);
+      if (cached === treeSha) return false;
+      localStorage.setItem(cacheKey, treeSha);
       return true;
     } catch {
       return true;
