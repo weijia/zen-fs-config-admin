@@ -1,37 +1,16 @@
 /**
  * Register all backend types that zen-fs-config-admin supports.
  *
- * zen-fs-config only ships with InMemory built in.  All other backends
- * are registered here at app startup, using whatever packages the admin
- * app decides to bundle.
+ * zen-fs-config ships with InMemory and IndexedDB built in (both with
+ * metadata for UI form generation).  All other backends are registered
+ * here at app startup, using whatever packages the admin app decides
+ * to bundle.
  *
  * Adding a new backend?  Just add another registerBackend() call here
  * and pass the metadata as the 3rd argument — no changes needed to zen-fs-config.
  */
 
 import { registerBackend, wrapZenFSFileSystem } from 'zen-fs-config';
-
-// ---------------------------------------------------------------------------
-// IndexedDB (browser local)
-// ---------------------------------------------------------------------------
-
-let idbCounter = 0;
-
-registerBackend('IndexedDB', async (options) => {
-  const { IndexedDB } = await import('@zenfs/dom');
-
-  const storeName = (options.storeName as string) ?? `zen-fs-config-${++idbCounter}`;
-
-  return wrapZenFSFileSystem({ backend: IndexedDB, storeName });
-}, {
-  type: 'IndexedDB',
-  label: 'IndexedDB',
-  icon: '\u{1F4BE}',
-  fields: [
-    { key: 'storeName', label: 'Store Name', type: 'text', placeholder: 'zen-fs-config-1' },
-  ],
-  defaultOptions: { storeName: '' },
-});
 
 // ---------------------------------------------------------------------------
 // WebStorage / localStorage (browser local)

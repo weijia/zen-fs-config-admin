@@ -2,6 +2,50 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 
+// ---------------------------------------------------------------------------
+// JSON Syntax Highlighter
+//
+// Lightweight regex-based tokenizer that produces HTML spans for syntax
+// coloring. Used in an overlay <pre> behind a transparent <textarea>.
+// ---------------------------------------------------------------------------
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function highlightJson(text: string): string {
+  const tokenRegex =
+    /("(?:\\.|[^"\\])*"\s*:)|("(?:\\.|[^"\\])*")|(-?\d+\.?\d*(?:[eE][+-]?\d+)?)|(\btrue\b|\bfalse\b|\bnull\b)|([{}\[\],])/g;
+
+  let result = '';
+  let last = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = tokenRegex.exec(text)) !== null) {
+    if (m.index > last) result += escapeHtml(text.slice(last, m.index));
+    const [, key, str, num, bool, punct] = m;
+    if (key) {
+      const km = key.match(/^("(?:\\.|[^"\\])*")(\s*:)$/);
+      if (km) {
+        result += `<span class="json-key">${escapeHtml(km[1])}</span>${escapeHtml(km[2])}`;
+      } else {
+        result += `<span class="json-key">${escapeHtml(key)}</span>`;
+      }
+    } else if (str) {
+      result += `<span class="json-string">${escapeHtml(str)}</span>`;
+    } else if (num) {
+      result += `<span class="json-number">${escapeHtml(num)}</span>`;
+    } else if (bool) {
+      result += `<span class="json-bool">${escapeHtml(bool)}</span>`;
+    } else if (punct) {
+      result += `<span class="json-punct">${escapeHtml(punct)}</span>`;
+    }
+    last = tokenRegex.lastIndex;
+  }
+  if (last < text.length) result += escapeHtml(text.slice(last));
+  return result;
+}
+
 interface TreeNode {
   name: string;
   path: string;
@@ -132,6 +176,7 @@ export default function FilesPage() {
   const [versionInfo, setVersionInfo] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const fsRef = useRef<any>(null);
+  const highlightRef = useRef<HTMLPreElement>(null);
 
   // Load root level once
   useEffect(() => {
@@ -301,12 +346,35 @@ export default function FilesPage() {
                 version: {versionInfo.version} | hash: {versionInfo.hash} | author: {versionInfo.author} | {new Date(versionInfo.timestamp).toLocaleString()}
               </div>
             )}
-            <textarea
-              className="editor-textarea"
-              value={content}
-              onChange={e => setContent(e.target.value)}
-              spellCheck={false}
-            />
+            {isJson ? (
+              <div className="json-editor-overlay">
+                <pre
+                  ref={highlightRef}
+                  className="json-highlight-layer"
+                  dangerouslySetInnerHTML={{ __html: highlightJson(content) + '\n' }}
+                  aria-hidden="true"
+                />
+                <textarea
+                  className="editor-textarea json-editor-input"
+                  value={content}
+                  onChange={e => setContent(e.target.value)}
+                  onScroll={e => {
+                    if (highlightRef.current) {
+                      highlightRef.current.scrollTop = e.currentTarget.scrollTop;
+                      highlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
+                    }
+                  }}
+                  spellCheck={false}
+                />
+              </div>
+            ) : (
+              <textarea
+                className="editor-textarea"
+                value={content}
+                onChange={e => setContent(e.target.value)}
+                spellCheck={false}
+              />
+            )}
           </div>
         ) : (
           <div className="empty-state">
