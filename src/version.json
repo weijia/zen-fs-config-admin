@@ -1,15 +1,15 @@
 {
-  "version": "main-fb2497c",
-  "buildTime": "2026/08/01 17:07:32",
-  "sha": "fb2497c",
-  "branch": "main",
+  "version": "HEAD-88d2663",
+  "buildTime": "2026/08/01 17:30:10",
+  "sha": "88d2663",
+  "branch": "HEAD",
   "tag": "",
   "deps": {
-    "zen-fs-config": "0.4.6",
+    "zen-fs-config": "0.5.0",
     "zen-fs-sync": "0.4.3",
     "zen-fs-remotestoragejs": "1.2.14",
     "zen-fs-cache": "1.0.1",
-    "@zenfs/core": "2.6.1",
-    "@zenfs/dom": "1.2.10"
+    "@zenfs/core": "2.5.8",
+    "@zenfs/dom": "1.2.9"
   }
 }
