@@ -1,12 +1,12 @@
 {
-  "version": "main-fae04c2",
-  "buildTime": "2026/08/02 16:29:37",
-  "sha": "fae04c2",
+  "version": "main-43f6073",
+  "buildTime": "2026/08/05 21:57:16",
+  "sha": "43f6073",
   "branch": "main",
   "tag": "",
   "deps": {
     "zen-fs-config": "0.5.4",
-    "zen-fs-sync": "0.4.4",
+    "zen-fs-sync": "0.4.5",
     "zen-fs-remotestoragejs": "1.2.14",
     "zen-fs-cache": "1.0.1",
     "@zenfs/core": "2.5.8",
