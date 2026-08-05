@@ -1,11 +1,11 @@
 {
-  "version": "main-43f6073",
-  "buildTime": "2026/08/05 21:57:16",
-  "sha": "43f6073",
+  "version": "main-9b7a6e8",
+  "buildTime": "2026/08/05 22:45:50",
+  "sha": "9b7a6e8",
   "branch": "main",
   "tag": "",
   "deps": {
-    "zen-fs-config": "0.5.4",
+    "zen-fs-config": "0.5.5",
     "zen-fs-sync": "0.4.5",
     "zen-fs-remotestoragejs": "1.2.14",
     "zen-fs-cache": "1.0.1",
