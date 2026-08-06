@@ -55,7 +55,8 @@ registerBackend('GitHub', async (options) => {
     repo: options.repo,
     branch: options.branch,
     baseUrl: (options.baseUrl && (options.baseUrl as string).trim()) || undefined,
-  });
+    disableAsyncCache: true,
+  } as any);
 
   // shouldSync: 通过 tree SHA 检测远端变更（2 次 API 请求，零误报）
   const owner = options.owner as string;
@@ -121,7 +122,8 @@ registerBackend('Gitee', async (options) => {
     repo: options.repo,
     branch: options.branch,
     baseUrl: (options.baseUrl && (options.baseUrl as string).trim()) || undefined,
-  });
+    disableAsyncCache: true,
+  } as any);
 
   // shouldSync: 通过 tree SHA 检测远端变更（2 次 API 请求，零误报）
   const owner = options.owner as string;
