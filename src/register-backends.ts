@@ -333,7 +333,13 @@ registerBackend('RemoteStorage', async (options) => {
   // RemoteStorageFileSystem provides a fs.promises-like API.
   // Bridge it to our BackendInstance interface.
   const fsAny = fs as any;
-  return {
+
+  // shouldSync: check if remote storage has changed by comparing the
+  // ETag/Last-Modified of the root directory. Uses a single HEAD request.
+  const baseUrl = href.replace(/\/$/, '');
+  const cacheKey = `zen-fs-rs-sync:${baseUrl}:${basePath || '/'}`;
+
+  const backend = {
     async readFile(path: string, ...args: any[]): Promise<any> {
       return fsAny.readFile(path, ...args);
     },
@@ -361,7 +367,40 @@ registerBackend('RemoteStorage', async (options) => {
     async rename(oldPath: string, newPath: string): Promise<void> {
       await fsAny.rename(oldPath, newPath);
     },
+    backendName: (fs as any).backendName,
   };
+
+  (backend as any).shouldSync = async (): Promise<boolean> => {
+    try {
+      const bp = basePath || '/';
+      const normalizedBp = bp.endsWith('/') ? bp : bp + '/';
+      const checkUrl = `${baseUrl}${normalizedBp}`;
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${token}`,
+      };
+      const res = await fetch(checkUrl, {
+        method: 'HEAD',
+        headers,
+        credentials: 'omit',
+      });
+      if (!res.ok) return true;
+
+      // Use ETag or Last-Modified as revision token
+      const etag = res.headers.get('etag') || '';
+      const lastModified = res.headers.get('last-modified') || '';
+      const revision = etag || lastModified;
+      if (!revision) return true; // Can't determine, err on side of syncing
+
+      const cached = localStorage.getItem(cacheKey);
+      if (cached === revision) return false;
+      localStorage.setItem(cacheKey, revision);
+      return true;
+    } catch {
+      return true;
+    }
+  };
+
+  return backend;
 }, {
   type: 'RemoteStorage',
   label: 'RemoteStorage',
