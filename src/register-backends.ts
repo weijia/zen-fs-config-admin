@@ -352,14 +352,34 @@ async function resolveStorageUrl(userAddress: string): Promise<string> {
   }
 
   const data = await res.json();
-  const links = data.links || [];
-  const storageLink = links.find((l: any) =>
-    l.rel === 'http://remotestorage.io/spec/version' ||
-    l.rel === 'remotestorage'
-  );
+  const links: any[] = data.links || [];
+
+  // The RemoteStorage spec has used several rel values over time:
+  //   - 'http://remotestorage.io/spec/version'     (newer spec)
+  //   - 'remotestorage'                              (shorthand)
+  //   - 'http://tools.ietf.org/id/draft-dejong-remotestorage'  (IETF draft, used by 5apps.com)
+  //   - 'http://tools.ietf.org/id/draft-dejong-remotestorage-XX'  (versioned IETF draft)
+  // The version info is in properties['http://remotestorage.io/spec/version'].
+  const storageLink = links.find((l: any) => {
+    if (!l.rel) return false;
+    if (l.rel === 'http://remotestorage.io/spec/version') return true;
+    if (l.rel === 'remotestorage') return true;
+    if (l.rel === 'http://tools.ietf.org/id/draft-dejong-remotestorage') return true;
+    if (/^http:\/\/tools\.ietf\.org\/id\/draft-dejong-remotestorage-\d+$/.test(l.rel)) return true;
+    // Fallback: check properties for the version key
+    if (l.properties && l.properties['http://remotestorage.io/spec/version']) return true;
+    return false;
+  });
 
   if (!storageLink?.href) {
-    throw new Error('WebFinger response does not contain a RemoteStorage storage URL');
+    // Log the raw WebFinger response for debugging
+    console.error('[RemoteStorage] WebFinger links:', JSON.stringify(links, null, 2));
+    throw new Error(
+      'WebFinger response does not contain a RemoteStorage storage URL. ' +
+      'Expected a link with rel="http://remotestorage.io/spec/version" or ' +
+      '"http://tools.ietf.org/id/draft-dejong-remotestorage". ' +
+      'Check console for the full WebFinger response.'
+    );
   }
 
   const storageUrl = storageLink.href.replace(/\/$/, '');
