@@ -220,6 +220,7 @@ export default function FilesPage() {
     // Load version info
     import('zen-fs-config').then(({ versionPathFor }) => {
       const vp = versionPathFor(effectivePath);
+      if (!vp) return;
       fs.readFile(vp, 'utf-8').then((v: any) => {
         const str = typeof v === 'string' ? v : new TextDecoder().decode(v as Uint8Array);
         setVersionInfo(JSON.parse(str));

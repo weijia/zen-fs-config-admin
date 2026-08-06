@@ -318,13 +318,65 @@ registerBackend('WebDAV', async (options) => {
 // RemoteStorage (zen-fs-remotestoragejs)
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve a RemoteStorage user address (user@host) to a storage URL via
+ * WebFinger discovery. If the input is already a URL (starts with http),
+ * it's returned as-is.
+ */
+async function resolveStorageUrl(userAddress: string): Promise<string> {
+  // Already a full URL — use as-is
+  if (/^https?:\/\//.test(userAddress)) {
+    return userAddress.replace(/\/$/, '');
+  }
+
+  // Must be user@host format
+  const atIdx = userAddress.lastIndexOf('@');
+  if (atIdx < 0) {
+    throw new Error(`Invalid RemoteStorage address: "${userAddress}". Expected a URL (https://...) or user@host address.`);
+  }
+
+  const user = userAddress.substring(0, atIdx);
+  const host = userAddress.substring(atIdx + 1);
+
+  // WebFinger discovery
+  const webfingerUrl = `https://${host}/.well-known/webfinger?resource=acct:${user}@${host}`;
+  console.log(`[RemoteStorage] WebFinger discovery: ${webfingerUrl}`);
+
+  const res = await fetch(webfingerUrl, {
+    headers: { 'Accept': 'application/json' },
+    credentials: 'omit',
+  });
+
+  if (!res.ok) {
+    throw new Error(`WebFinger discovery failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  const links = data.links || [];
+  const storageLink = links.find((l: any) =>
+    l.rel === 'http://remotestorage.io/spec/version' ||
+    l.rel === 'remotestorage'
+  );
+
+  if (!storageLink?.href) {
+    throw new Error('WebFinger response does not contain a RemoteStorage storage URL');
+  }
+
+  const storageUrl = storageLink.href.replace(/\/$/, '');
+  console.log(`[RemoteStorage] Resolved storage URL: ${storageUrl}`);
+  return storageUrl;
+}
+
 registerBackend('RemoteStorage', async (options) => {
   const { RemoteStorageFileSystem } = await import('zen-fs-remotestoragejs');
 
-  const href = (options.href as string) ?? '';
+  const rawHref = (options.href as string) ?? '';
   const token = (options.token as string) ?? '';
-  if (!href) throw new Error('RemoteStorage backend requires "href" option');
+  if (!rawHref) throw new Error('RemoteStorage backend requires "href" option');
   if (!token) throw new Error('RemoteStorage backend requires "token" option');
+
+  // Resolve user address (user@host) to storage URL via WebFinger
+  const href = await resolveStorageUrl(rawHref);
 
   const basePath = (options.basePath as string) || undefined;
 
