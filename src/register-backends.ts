@@ -326,9 +326,26 @@ registerBackend('WebDAV', async (options) => {
  * it's returned as-is.
  */
 async function resolveStorageUrl(userAddress: string): Promise<string> {
-  // Already a full URL — use as-is
+  // Already a full URL
   if (/^https?:\/\//.test(userAddress)) {
-    return userAddress.replace(/\/$/, '');
+    const cleaned = userAddress.replace(/\/$/, '');
+    // Heuristic: if the URL contains '@' in the path, the raw user@host
+    // address was incorrectly included in the URL. Extract it and do
+    // WebFinger discovery to get the correct storage URL.
+    // Example: "https://retire.mine2.icu/weijia@5apps.com/app_data" → extract "weijia@5apps.com"
+    const pathPart = cleaned.replace(/^https?:\/\/[^/]+/, '');
+    const atMatch = pathPart.match(/([^/]+@[^/]+)/);
+    if (atMatch) {
+      const extracted = atMatch[1];
+      console.warn(
+        `[RemoteStorage] href "${userAddress}" contains a user@host ("${extracted}") in the URL path. ` +
+        `This looks like a misconfiguration — extracting "${extracted}" and resolving via WebFinger instead.`
+      );
+      // Recurse with the extracted user@host address
+      return resolveStorageUrl(extracted);
+    }
+    // Plain URL without '@' — use as-is
+    return cleaned;
   }
 
   // Must be user@host format
@@ -457,6 +474,17 @@ registerBackend('RemoteStorage', async (options) => {
         headers,
         credentials: 'omit',
       });
+      // 401/403: Authentication failed — don't trigger a full sync that
+      // will also fail. Log a clear error so the user knows the token
+      // is invalid or the URL is wrong.
+      if (res.status === 401 || res.status === 403) {
+        console.error(
+          `[RemoteStorage] shouldSync: authentication failed (${res.status}) for ${checkUrl}. ` +
+          `Token may be expired or the storage URL may be incorrect. ` +
+          `Resolved href: ${href}, raw href: ${rawHref}`
+        );
+        return false;
+      }
       if (!res.ok) return true;
 
       // Use ETag or Last-Modified as revision token
