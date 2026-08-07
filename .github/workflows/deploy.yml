@@ -22,15 +22,40 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout admin
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Checkout zen-fs-sync
+        uses: actions/checkout@v4
+        with:
+          repository: weijia/zen-fs-sync
+          path: ../zen-fs-sync
+
+      - name: Checkout zen-fs-config
+        uses: actions/checkout@v4
+        with:
+          repository: weijia/zen-fs-config
+          path: ../zen-fs-config
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+
+      - name: Build zen-fs-sync
+        run: |
+          cd ../zen-fs-sync
+          npm install
+          npm run build
+
+      - name: Build zen-fs-config
+        run: |
+          cd ../zen-fs-config
+          npm install
+          npm run build
 
       - name: Install dependencies
         run: npm ci
