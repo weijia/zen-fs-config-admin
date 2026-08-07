@@ -1,13 +1,13 @@
 {
-  "version": "main-0580aff",
-  "buildTime": "2026/08/07 16:05:09",
-  "sha": "0580aff",
+  "version": "main-e88fa5e",
+  "buildTime": "2026/08/07 16:29:42",
+  "sha": "e88fa5e",
   "branch": "main",
   "tag": "",
   "deps": {
     "zen-fs-config": "0.5.13",
     "zen-fs-sync": "0.4.5",
-    "zen-fs-remotestoragejs": "1.2.24",
+    "zen-fs-remotestoragejs": "1.2.25",
     "zen-fs-cache": "1.0.2",
     "@zenfs/core": "2.5.7",
     "@zenfs/dom": "1.2.9"
