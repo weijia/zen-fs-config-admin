@@ -7,7 +7,7 @@ import '../register-backends';
 
 const NODE_ID_STORAGE_KEY = 'zen-fs-config-admin:node-id';
 const APP_ID = 'admin';
-const CACHE_TTL_MS = 60000;
+const CACHE_TTL_MS = 300000; // 5 min — shouldSync is the primary gate; TTL is a secondary safety net
 
 function getOrCreateNodeId(): string {
   try {
@@ -46,7 +46,7 @@ async function createRepo(): Promise<IConfigRepo> {
   const nodeId = getOrCreateNodeId();
   return createConfigRepo(APP_ID, {
     nodeId,
-    cache: { storeType: 'MemoryCacheStore', ttlMs: CACHE_TTL_MS },
+    cache: { storeType: 'IdbCacheStore', ttlMs: CACHE_TTL_MS },
   });
 }
 
