@@ -56,7 +56,7 @@ jobs:
           npm install
           npm run build
 
-      - name: Create sibling symlinks for file: dependencies
+      - name: Create sibling symlinks for local file deps
         run: |
           ln -s "$GITHUB_WORKSPACE/deps/zen-fs-sync" "$GITHUB_WORKSPACE/../zen-fs-sync"
           ln -s "$GITHUB_WORKSPACE/deps/zen-fs-config" "$GITHUB_WORKSPACE/../zen-fs-config"
