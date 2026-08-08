@@ -20,7 +20,7 @@
     "zen-fs-config": "^0.5.17",
     "zen-fs-gitee": "^1.2.8",
     "zen-fs-github": "github:weijia/zen-fs-github#main",
-    "zen-fs-remotestoragejs": "^1.2.32",
+    "zen-fs-remotestoragejs": "^1.2.33",
     "zen-fs-sync": "^0.4.8"
   },
   "devDependencies": {
