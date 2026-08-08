@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import { versionDisplay, buildTimeDisplay } from '../version';
@@ -13,9 +14,23 @@ const navItems = [
 
 export default function Layout() {
   const { repo, connected, reconnect, reconnecting } = useConfigRepo();
+  const [vConsoleLoaded, setVConsoleLoaded] = useState(false);
 
   const statuses = repo ? repo.getSyncStatuses() : new Map();
   const anyWatching = Array.from(statuses.values()).some(s => s.watching);
+
+  const toggleVConsole = async () => {
+    if (!vConsoleLoaded) {
+      const VConsole = (await import('vconsole')).default;
+      new VConsole({ theme: 'dark' });
+      setVConsoleLoaded(true);
+    } else {
+      const el = document.getElementById('__vconsole');
+      if (el) {
+        el.style.display = el.style.display === 'none' ? '' : 'none';
+      }
+    }
+  };
 
   return (
     <div className="app-layout">
@@ -75,6 +90,13 @@ export default function Layout() {
           </>
         )}
         <span style={{ marginLeft: 'auto' }}>{versionDisplay} | {buildTimeDisplay}</span>
+        <button
+          className="btn btn-sm btn-secondary"
+          onClick={toggleVConsole}
+          style={{ marginLeft: 8 }}
+        >
+          Console
+        </button>
       </div>
     </div>
   );

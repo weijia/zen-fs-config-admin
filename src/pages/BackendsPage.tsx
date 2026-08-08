@@ -3,6 +3,9 @@ import { useConfigRepo } from '../context/ConfigRepoContext';
 import type { BackendDescriptor } from 'zen-fs-config';
 import { getBackendTypeDef, getBackendTypes } from '../backend-types';
 import { serializeBackend, deserializeBackend } from '../backend-config-string';
+import { createLogger } from '@richard432/localstorage-logger';
+
+const log = createLogger('admin:backends');
 
 export default function BackendsPage() {
   const { repo, reconnect, primaryBackendId } = useConfigRepo();
@@ -144,10 +147,10 @@ export default function BackendsPage() {
       setMessage('Saved, reconnecting...');
       setTimeout(() => setMessage(''), 3000);
       try { await repo.syncMetaToReplicas(); } catch (err: any) {
-        console.warn('[BackendsPage] syncMetaToReplicas failed:', err?.message);
+        log.warn('[BackendsPage] syncMetaToReplicas failed:', err?.message);
       }
       try { await reconnect(); } catch (err: any) {
-        console.warn('[BackendsPage] reconnect failed:', err?.message);
+        log.warn('[BackendsPage] reconnect failed:', err?.message);
       }
     }
     await loadBackends();
@@ -162,7 +165,7 @@ export default function BackendsPage() {
       setTimeout(() => setMessage(''), 3000);
     } catch (err: any) {
       // Fallback to old method if removeBackend fails
-      console.warn('[BackendsPage] removeBackend failed, using fallback:', err?.message);
+      log.warn('[BackendsPage] removeBackend failed, using fallback:', err?.message);
       const updated = backends.filter(b => b.id !== id);
       await repo.updateBackends({ version: 1, backends: updated });
       await repo.syncMetaToReplicas();

@@ -1,5 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
+import { createLogger } from '@richard432/localstorage-logger';
+
+const log = createLogger('admin:dashboard');
 
 export default function DashboardPage() {
   const { repo } = useConfigRepo();
@@ -25,10 +28,10 @@ export default function DashboardPage() {
     const totalSyncs = pairs.reduce((sum, [, s]) => sum + s.totalSyncs, 0);
 
     if (totalSyncs !== prevTotalSyncsRef.current) {
-      console.log('[sync-data] status tick — totalSyncs:', totalSyncs, 'pairs:', pairs.length);
+      log.log('[sync-data] status tick — totalSyncs:', totalSyncs, 'pairs:', pairs.length);
       pairs.forEach(([id, s]) => {
         const r = s.lastResult;
-        console.log('[sync-data]   pair:', id,
+        log.log('[sync-data]   pair:', id,
           'state:', s.state,
           'watching:', s.watching,
           'totalSyncs:', s.totalSyncs,
@@ -51,13 +54,13 @@ export default function DashboardPage() {
   const handleFlush = async () => {
     setFlushing(true);
     try {
-      console.log('[sync-data] flush start');
+      log.log('[sync-data] flush start');
       const results = await repo.flush();
-      console.log('[sync-data] flush done, results:', JSON.stringify(results));
+      log.log('[sync-data] flush done, results:', JSON.stringify(results));
       setFlushResult(results);
       repo.listConflicts().then(setConflicts).catch(() => {});
     } catch (err) {
-      console.error('[sync-data] flush failed:', err);
+      log.error('[sync-data] flush failed:', err);
     } finally {
       setFlushing(false);
     }
@@ -69,12 +72,12 @@ export default function DashboardPage() {
     if (!engine) return;
     setSyncingPair(pairId);
     try {
-      console.log('[sync-data] manual sync start:', pairId);
+      log.log('[sync-data] manual sync start:', pairId);
       const result = await engine.sync(pairId);
-      console.log('[sync-data] manual sync done:', pairId, result);
+      log.log('[sync-data] manual sync done:', pairId, result);
       repo.listConflicts().then(setConflicts).catch(() => {});
     } catch (err) {
-      console.error('[sync-data] manual sync failed:', pairId, err);
+      log.error('[sync-data] manual sync failed:', pairId, err);
     } finally {
       setSyncingPair(null);
       setRefreshKey(k => k + 1);
@@ -107,23 +110,23 @@ export default function DashboardPage() {
         const direction = pair.options?.direction;
         const root = pair.root || '/';
 
-        console.log(`[diag] pair=${pairId} prefix=${prefix} dir=${direction} root=${root}`);
+        log.log(`[diag] pair=${pairId} prefix=${prefix} dir=${direction} root=${root}`);
 
         // Walk source
         const srcFiles: string[] = [];
         await walkAndCollect(pair.source, root, prefix, srcFiles);
-        console.log(`[diag] ${pairId} source files (${srcFiles.length}):`, srcFiles);
+        log.log(`[diag] ${pairId} source files (${srcFiles.length}):`, srcFiles);
 
         // Walk target
         const tgtFiles: string[] = [];
         await walkAndCollect(pair.target, root, prefix, tgtFiles);
-        console.log(`[diag] ${pairId} target files (${tgtFiles.length}):`, tgtFiles);
+        log.log(`[diag] ${pairId} target files (${tgtFiles.length}):`, tgtFiles);
 
         const inSrcNotTgt = srcFiles.filter(f => !tgtFiles.includes(f));
         const inTgtNotSrc = tgtFiles.filter(f => !srcFiles.includes(f));
 
-        console.log(`[diag] ${pairId} inSourceNotTarget (${inSrcNotTgt.length}):`, inSrcNotTgt);
-        console.log(`[diag] ${pairId} inTargetNotSource (${inTgtNotSrc.length}):`, inTgtNotSrc);
+        log.log(`[diag] ${pairId} inSourceNotTarget (${inSrcNotTgt.length}):`, inSrcNotTgt);
+        log.log(`[diag] ${pairId} inTargetNotSource (${inTgtNotSrc.length}):`, inTgtNotSrc);
 
         results.push({
           pairId,
@@ -140,7 +143,7 @@ export default function DashboardPage() {
 
       setDiagResult({ pairs: results });
     } catch (err) {
-      console.error('[diag] failed:', err);
+      log.error('[diag] failed:', err);
       setDiagResult({ error: String(err) });
     } finally {
       setDiagRunning(false);
@@ -161,15 +164,15 @@ export default function DashboardPage() {
       if (!pairsMap) return;
 
       for (const [pairId, pair] of pairsMap.entries()) {
-        console.log(`[diag] force full sync: ${pairId} - resetting sourceSnapshots`);
+        log.log(`[diag] force full sync: ${pairId} - resetting sourceSnapshots`);
         pair.sourceSnapshots = new Map();
         const result = await engine.sync(pairId);
-        console.log(`[diag] force full sync done: ${pairId}`, result);
+        log.log(`[diag] force full sync done: ${pairId}`, result);
       }
       setRefreshKey(k => k + 1);
       repo.listConflicts().then(setConflicts).catch(() => {});
     } catch (err) {
-      console.error('[diag] force full sync failed:', err);
+      log.error('[diag] force full sync failed:', err);
     } finally {
       setDiagRunning(false);
     }

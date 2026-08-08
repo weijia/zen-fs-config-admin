@@ -1,7 +1,7 @@
 {
   "name": "zen-fs-config-admin",
   "private": true,
-  "version": "0.3.27",
+  "version": "0.3.28",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,11 +11,13 @@
     "postinstall": "echo 'no patches'"
   },
   "dependencies": {
+    "@richard432/localstorage-logger": "^0.1.0",
     "@zenfs/core": "^2.5.7",
     "@zenfs/dom": "^1.2.9",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
+    "vconsole": "^3.15.1",
     "zen-fs-cache": "^1.0.5",
     "zen-fs-config": "^0.5.19",
     "zen-fs-gitee": "^1.2.8",

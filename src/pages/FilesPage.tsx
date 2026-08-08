@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
+import { createLogger } from '@richard432/localstorage-logger';
+
+const log = createLogger('admin:files');
 
 // ---------------------------------------------------------------------------
 // JSON Syntax Highlighter
@@ -212,7 +215,7 @@ export default function FilesPage() {
         setOriginalContent('');
       }
     }).catch((err: any) => {
-      console.warn('[FilesPage] load file error:', err.message);
+      log.warn('[FilesPage] load file error:', err.message);
       setContent('');
       setOriginalContent('');
     });

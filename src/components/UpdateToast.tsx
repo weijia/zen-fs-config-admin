@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react'
+import { createLogger } from '@richard432/localstorage-logger';
+
+const log = createLogger('admin:update-toast');
 
 // 去重标志：updatefound 和 updated 都可能触发，确保只通知一次
 let updateAvailable = false
@@ -19,7 +22,7 @@ export default function UpdateToast() {
           if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
             if (!updateAvailable) {
               updateAvailable = true
-              console.log('[PWA] 新版本可用')
+              log.log('[PWA] 新版本可用')
               setShow(true)
             }
           }
@@ -31,12 +34,12 @@ export default function UpdateToast() {
     navigator.serviceWorker.ready.then((reg) => {
       handleUpdate(reg)
       // 3 秒后检查更新
-      setTimeout(() => reg.update().catch(console.error), 3000)
+      setTimeout(() => reg.update().catch(log.error), 3000)
     })
 
     // 每 5 分钟轮询
     const interval = setInterval(() => {
-      navigator.serviceWorker.ready.then((reg) => reg.update().catch(console.error))
+      navigator.serviceWorker.ready.then((reg) => reg.update().catch(log.error))
     }, 5 * 60 * 1000)
 
     return () => clearInterval(interval)

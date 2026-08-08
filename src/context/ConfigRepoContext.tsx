@@ -4,6 +4,9 @@ import { versionDisplay, buildTimeDisplay } from '../version';
 // Register all backend types (IndexedDB, WebStorage, GitHub, Gitee, WebDAV, RemoteStorage, ...)
 // This must be imported BEFORE createConfigRepo() is called.
 import '../register-backends';
+import { createLogger } from '@richard432/localstorage-logger';
+
+const log = createLogger('admin:config-repo-context');
 
 const NODE_ID_STORAGE_KEY = 'zen-fs-config-admin:node-id';
 const APP_ID = 'admin';
@@ -73,11 +76,11 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
         repoRef.current = r;
         setRepo(r);
         setConnected(true);
-        console.log('[version] connected:', versionDisplay, '| build:', buildTimeDisplay);
+        log.log('[version] connected:', versionDisplay, '| build:', buildTimeDisplay);
       })
       .catch(err => {
         if (!cancelled) {
-          console.error('[version] auto-connect failed:', err);
+          log.error('[version] auto-connect failed:', err);
           setError(err.message || String(err));
         }
       })
@@ -99,7 +102,7 @@ export function ConfigRepoProvider({ children }: { children: ReactNode }) {
       // Dispose old repo AFTER swap
       try { if (oldRepo) await oldRepo.dispose(); } catch { /* already disposed */ }
 
-      console.log('[version] reconnected:', versionDisplay, '| build:', buildTimeDisplay);
+      log.log('[version] reconnected:', versionDisplay, '| build:', buildTimeDisplay);
     } catch (err: any) {
       setError(err.message || String(err));
     } finally {

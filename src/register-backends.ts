@@ -11,6 +11,9 @@
  */
 
 import { registerBackend, wrapZenFSFileSystem } from 'zen-fs-config';
+import { createLogger } from '@richard432/localstorage-logger';
+
+const log = createLogger('admin:register-backends');
 
 // ---------------------------------------------------------------------------
 // WebStorage / localStorage (browser local)
@@ -337,7 +340,7 @@ async function resolveStorageUrl(userAddress: string): Promise<string> {
     const atMatch = pathPart.match(/([^/]+@[^/]+)/);
     if (atMatch) {
       const extracted = atMatch[1];
-      console.warn(
+      log.warn(
         `[RemoteStorage] href "${userAddress}" contains a user@host ("${extracted}") in the URL path. ` +
         `This looks like a misconfiguration — extracting "${extracted}" and resolving via WebFinger instead.`
       );
@@ -359,7 +362,7 @@ async function resolveStorageUrl(userAddress: string): Promise<string> {
 
   // WebFinger discovery
   const webfingerUrl = `https://${host}/.well-known/webfinger?resource=acct:${user}@${host}`;
-  console.log(`[RemoteStorage] WebFinger discovery: ${webfingerUrl}`);
+  log.log(`[RemoteStorage] WebFinger discovery: ${webfingerUrl}`);
 
   const res = await fetch(webfingerUrl, {
     headers: { 'Accept': 'application/json' },
@@ -392,7 +395,7 @@ async function resolveStorageUrl(userAddress: string): Promise<string> {
 
   if (!storageLink?.href) {
     // Log the raw WebFinger response for debugging
-    console.error('[RemoteStorage] WebFinger links:', JSON.stringify(links, null, 2));
+    log.error('[RemoteStorage] WebFinger links:', JSON.stringify(links, null, 2));
     throw new Error(
       'WebFinger response does not contain a RemoteStorage storage URL. ' +
       'Expected a link with rel="http://remotestorage.io/spec/version" or ' +
@@ -402,7 +405,7 @@ async function resolveStorageUrl(userAddress: string): Promise<string> {
   }
 
   const storageUrl = storageLink.href.replace(/\/$/, '');
-  console.log(`[RemoteStorage] Resolved storage URL: ${storageUrl}`);
+  log.log(`[RemoteStorage] Resolved storage URL: ${storageUrl}`);
   return storageUrl;
 }
 
@@ -488,7 +491,7 @@ registerBackend('RemoteStorage', async (options) => {
       // will also fail. Log a clear error so the user knows the token
       // is invalid or the URL is wrong.
       if (res.status === 401 || res.status === 403) {
-        console.error(
+        log.error(
           `[RemoteStorage] shouldSync: authentication failed (${res.status}) for ${checkUrl}. ` +
           `Token may be expired or the storage URL may be incorrect. ` +
           `Resolved href: ${href}, raw href: ${rawHref}`
