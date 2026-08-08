@@ -22,44 +22,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout admin
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Checkout zen-fs-sync
-        uses: actions/checkout@v4
-        with:
-          repository: weijia/zen-fs-sync
-          path: deps/zen-fs-sync
-
-      - name: Checkout zen-fs-config
-        uses: actions/checkout@v4
-        with:
-          repository: weijia/zen-fs-config
-          path: deps/zen-fs-config
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Build zen-fs-sync
-        run: |
-          cd deps/zen-fs-sync
-          npm install
-          npm run build
-
-      - name: Build zen-fs-config
-        run: |
-          cd deps/zen-fs-config
-          npm install
-          npm run build
-
-      - name: Create sibling symlinks for local file deps
-        run: |
-          ln -s "$GITHUB_WORKSPACE/deps/zen-fs-sync" "$GITHUB_WORKSPACE/../zen-fs-sync"
-          ln -s "$GITHUB_WORKSPACE/deps/zen-fs-config" "$GITHUB_WORKSPACE/../zen-fs-config"
 
       - name: Install dependencies
         run: npm ci

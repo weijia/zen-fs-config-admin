@@ -1,7 +1,7 @@
 {
-  "version": "main-87b1ebe",
-  "buildTime": "2026/08/07 23:39:20",
-  "sha": "87b1ebe",
+  "version": "main-dbd650d",
+  "buildTime": "2026/08/08 08:14:09",
+  "sha": "dbd650d",
   "branch": "main",
   "tag": "",
   "deps": {
@@ -9,7 +9,7 @@
     "zen-fs-sync": "0.4.6",
     "zen-fs-remotestoragejs": "1.2.25",
     "zen-fs-cache": "1.0.2",
-    "@zenfs/core": "2.5.7",
-    "@zenfs/dom": "1.2.9"
+    "@zenfs/core": "2.6.2",
+    "@zenfs/dom": "1.2.10"
   }
 }
