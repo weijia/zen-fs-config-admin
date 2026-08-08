@@ -1,7 +1,7 @@
 {
   "name": "zen-fs-config-admin",
   "private": true,
-  "version": "0.3.26",
+  "version": "0.3.27",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,11 +17,11 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
     "zen-fs-cache": "^1.0.5",
-    "zen-fs-config": "^0.5.18",
+    "zen-fs-config": "^0.5.19",
     "zen-fs-gitee": "^1.2.8",
     "zen-fs-github": "github:weijia/zen-fs-github#main",
     "zen-fs-remotestoragejs": "^1.2.37",
-    "zen-fs-sync": "^0.4.8"
+    "zen-fs-sync": "^0.4.9"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
