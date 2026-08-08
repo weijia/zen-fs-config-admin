@@ -458,6 +458,16 @@ registerBackend('RemoteStorage', async (options) => {
     async rename(oldPath: string, newPath: string): Promise<void> {
       await fsAny.rename(oldPath, newPath);
     },
+    // Expose getRevision and readFileMeta so CachedFileSystem can do
+    // ETag-based revalidation instead of always re-fetching.
+    async getRevision(path: string): Promise<string | number | undefined> {
+      if (typeof fsAny.getRevision === 'function') return fsAny.getRevision(path);
+      return undefined;
+    },
+    async readFileMeta(path: string, opts?: any): Promise<any> {
+      if (typeof fsAny.readFileMeta === 'function') return fsAny.readFileMeta(path, opts);
+      throw new Error('readFileMeta not supported');
+    },
     backendName: (fs as any).backendName,
   };
 
