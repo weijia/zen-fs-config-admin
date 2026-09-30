@@ -410,7 +410,20 @@ async function resolveStorageUrl(userAddress: string): Promise<string> {
 }
 
 registerBackend('RemoteStorage', async (options) => {
-  const { RemoteStorageFileSystem } = await import('zen-fs-remotestoragejs');
+  const _rs = await import('zen-fs-remotestoragejs');
+  const RemoteStorageFileSystem =
+    _rs?.RemoteStorageFileSystem ??
+    _rs?.default ??
+    (globalThis as any).ZenFSRemoteStorage?.RemoteStorageFileSystem ??
+    (globalThis as any).RemoteStorageFileSystem ??
+    (typeof _rs === 'function' ? _rs : undefined);
+  if (typeof RemoteStorageFileSystem !== 'function') {
+    throw new Error(
+      `zen-fs-remotestoragejs loaded, but its RemoteStorageFileSystem export is not a ` +
+      `constructor (typeof=${typeof RemoteStorageFileSystem}). Load its UMD bundle so it ` +
+      `exposes the global "ZenFSRemoteStorage".`,
+    );
+  }
 
   const rawHref = (options.href as string) ?? '';
   const token = (options.token as string) ?? '';
