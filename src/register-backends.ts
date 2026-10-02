@@ -15,6 +15,11 @@ import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:register-backends');
 
+// Injected by vite.config.ts `define` (the actually-installed zen-fs-gitee version).
+declare const __ZEN_FS_GITEE_VERSION__: string;
+
+log.log(`[admin] zen-fs-gitee version = ${__ZEN_FS_GITEE_VERSION__}`);
+
 // ---------------------------------------------------------------------------
 // WebStorage / localStorage (browser local)
 // ---------------------------------------------------------------------------
@@ -118,6 +123,7 @@ registerBackend('GitHub', async (options) => {
 
 registerBackend('Gitee', async (options) => {
   const { Gitee } = await import('zen-fs-gitee');
+  log.log(`[admin] instantiating Gitee backend (zen-fs-gitee ${__ZEN_FS_GITEE_VERSION__})`);
   const backend = wrapZenFSFileSystem({
     backend: Gitee,
     token: options.token,
