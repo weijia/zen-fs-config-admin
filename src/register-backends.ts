@@ -117,6 +117,7 @@ registerBackend('GitHub', async (options) => {
     { key: 'baseUrl', label: 'API URL', type: 'text', placeholder: 'https://api.github.com' },
   ],
   defaultOptions: { owner: '', repo: '', branch: 'main', token: '', baseUrl: '' },
+  identityFields: ['owner', 'repo', 'branch', 'baseUrl'],
 });
 
 // ---------------------------------------------------------------------------
@@ -185,6 +186,9 @@ registerBackend('Gitee', async (options) => {
     { key: 'baseUrl', label: 'API URL', type: 'text', placeholder: 'https://gitee.com/api/v5' },
   ],
   defaultOptions: { owner: '', repo: '', branch: 'master', token: '', baseUrl: '' },
+  // identity = the Git repo location (token is auth, included so same-repo
+  // different-credential backends are still treated as distinct)
+  identityFields: ['owner', 'repo', 'branch', 'baseUrl'],
 });
 
 // ---------------------------------------------------------------------------
@@ -325,6 +329,8 @@ registerBackend('WebDAV', async (options) => {
     { key: 'rootPath', label: 'Root Path', type: 'text', placeholder: '/zen-fs-config/' },
   ],
   defaultOptions: { url: '', username: '', password: '', rootPath: '/' },
+  // identity = the WebDAV endpoint + root path
+  identityFields: ['url', 'rootPath'],
 });
 
 // ---------------------------------------------------------------------------
@@ -547,4 +553,8 @@ registerBackend('RemoteStorage', async (options) => {
     { key: 'basePath', label: 'Base Path', type: 'text', placeholder: '/zen-fs-config/' },
   ],
   defaultOptions: { href: '', token: '', basePath: '/' },
+  // identity = the RemoteStorage account + subtree. Client tuning (syncRootPath,
+  // timeout, persistCache, ...) is excluded so two connections to the same
+  // endpoint with different tuning are deduplicated as one replica.
+  identityFields: ['href', 'token', 'basePath'],
 });
