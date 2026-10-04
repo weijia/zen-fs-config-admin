@@ -48,6 +48,8 @@ registerBackend('WebStorage', async (options) => {
     ]},
   ],
   defaultOptions: { storageType: 'localStorage' },
+  // identity = which Web Storage bucket
+  identityFields: ['storageType'],
 });
 
 // ---------------------------------------------------------------------------
