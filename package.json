@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "node scripts/generate-version.js && tsc -b && vite build",
     "lint": "oxlint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
     "postinstall": "echo 'no patches'"
   },
@@ -34,6 +36,8 @@
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vite-plugin-pwa": "^1.3.0",
-    "workbox-precaching": "^7.4.1"
+    "workbox-precaching": "^7.4.1",
+    "vitest": "^5.0.1",
+    "jsdom": "^25.0.1"
   }
 }

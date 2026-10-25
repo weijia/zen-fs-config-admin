@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
+import { DATA_GROUPS_ROOT_PATH, fsPathFor, makeDataGroupPath, parseDataGroupPath } from '../data-group-path';
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:files');
@@ -51,17 +52,29 @@ function highlightJson(text: string): string {
 
 interface TreeNode {
   name: string;
+  /** 树路径：配置仓即真实路径；数据组带 `/@dg/<groupId>` 前缀。 */
   path: string;
+  /**
+   * 作用域前缀：该节点所在的命名空间。
+   * 配置仓为 `''`，数据组内为 `/@dg/<groupId>`。
+   * 子节点继承父节点的前缀，于是 `resolveFs(prefix)` 总能得到正确的 fs。
+   */
+  prefix: string;
   isDir: boolean;
   loaded: boolean;   // whether children have been loaded
   children: TreeNode[];
+  /** 虚拟节点类型：数据组容器 / 单个数据组。缺省即配置仓普通节点。 */
+  kind?: 'data-groups' | 'data-group';
 }
 
 /**
  * Load children of a directory. Only does one level — no recursion.
  * Uses mode bits to detect directories; no fallback readdir.
+ *
+ * @param prefix 树路径前缀（数据组为 `/@dag/<groupId>`，配置仓为 `''`），
+ *               子节点路径 = prefix + fs 内的真实路径。
  */
-async function loadChildren(fs: any, dir: string): Promise<TreeNode[]> {
+async function loadChildren(fs: any, dir: string, prefix = ''): Promise<TreeNode[]> {
   const entries: TreeNode[] = [];
   try {
     const items = await fs.readdir(dir);
@@ -72,7 +85,8 @@ async function loadChildren(fs: any, dir: string): Promise<TreeNode[]> {
         const isDir = stat.mode !== undefined && (stat.mode & 0o40000) === 0o40000;
         entries.push({
           name: item,
-          path: fullPath,
+          path: `${prefix}${fullPath}`,
+          prefix,
           isDir,
           loaded: !isDir,   // files are pre-loaded (no children), dirs need expansion
           children: [],
@@ -90,24 +104,24 @@ async function loadChildren(fs: any, dir: string): Promise<TreeNode[]> {
   });
 }
 
-function FileTree({ rootNodes, fs, selected, onSelect }: {
+function FileTree({ rootNodes, resolveFs, selected, onSelect }: {
   rootNodes: TreeNode[];
-  fs: any;
+  resolveFs: (path: string) => any;
   selected: string;
   onSelect: (path: string) => void;
 }) {
   return (
     <div className="file-tree">
       {rootNodes.map(n => (
-        <TreeNodeView key={n.path} node={n} fs={fs} selected={selected} onSelect={onSelect} depth={0} />
+        <TreeNodeView key={n.path} node={n} resolveFs={resolveFs} selected={selected} onSelect={onSelect} depth={0} />
       ))}
     </div>
   );
 }
 
-function TreeNodeView({ node, fs, selected, onSelect, depth }: {
+function TreeNodeView({ node, resolveFs, selected, onSelect, depth }: {
   node: TreeNode;
-  fs: any;
+  resolveFs: (path: string) => any;
   selected: string;
   onSelect: (path: string) => void;
   depth: number;
@@ -115,6 +129,9 @@ function TreeNodeView({ node, fs, selected, onSelect, depth }: {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [children, setChildren] = useState<TreeNode[]>(node.children);
+
+  // 数据组列表是异步到达的，容器节点的 children 会随之变化
+  useEffect(() => { setChildren(node.children); }, [node.children]);
 
   const handleClick = async () => {
     if (!node.isDir) {
@@ -128,9 +145,11 @@ function TreeNodeView({ node, fs, selected, onSelect, depth }: {
     }
     // Load children if not yet loaded
     if (!node.loaded) {
+      const fs = resolveFs(node.prefix || node.path);
+      if (!fs) return;
       setLoading(true);
       try {
-        const loaded = await loadChildren(fs, node.path);
+        const loaded = await loadChildren(fs, fsPathFor(node.path), node.prefix);
         node.children = loaded;
         node.loaded = true;
         setChildren(loaded);
@@ -152,13 +171,15 @@ function TreeNodeView({ node, fs, selected, onSelect, depth }: {
         <span style={{ width: 20, display: 'inline-block', textAlign: 'center' }}>
           {loading ? '⟳' : node.isDir ? (expanded ? '▼' : '▶') : ''}
         </span>
-        <span style={{ marginRight: 4 }}>{node.isDir ? '📁' : '📄'}</span>
+        <span style={{ marginRight: 4 }}>
+          {node.kind === 'data-groups' || node.kind === 'data-group' ? '🗂️' : node.isDir ? '📁' : '📄'}
+        </span>
         <span>{node.name}</span>
       </div>
       {expanded && children.length > 0 && (
         <div className="tree-children">
           {children.map(c => (
-            <TreeNodeView key={c.path} node={c} fs={fs} selected={selected} onSelect={onSelect} depth={depth + 1} />
+            <TreeNodeView key={c.path} node={c} resolveFs={resolveFs} selected={selected} onSelect={onSelect} depth={depth + 1} />
           ))}
         </div>
       )}
@@ -167,10 +188,10 @@ function TreeNodeView({ node, fs, selected, onSelect, depth }: {
 }
 
 export default function FilesPage() {
-  const { repo } = useConfigRepo();
+  const { repo, dataGroups, getDataGroupFs } = useConfigRepo();
   const params = useParams();
   const navigate = useNavigate();
-  const [rootNodes, setRootNodes] = useState<TreeNode[]>([]);
+  const [configNodes, setConfigNodes] = useState<TreeNode[]>([]);
   const [selectedPath, setSelectedPath] = useState('');
   const [content, setContent] = useState('');
   const [originalContent, setOriginalContent] = useState('');
@@ -178,28 +199,63 @@ export default function FilesPage() {
   const [message, setMessage] = useState('');
   const [versionInfo, setVersionInfo] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const fsRef = useRef<any>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
 
-  // Load root level once
+  /** 按树路径解析出应该使用的 fs（配置仓 or 某个数据组）。 */
+  const resolveFs = useCallback((path: string): any => {
+    const parsed = parseDataGroupPath(path);
+    if (parsed) return getDataGroupFs(parsed.groupId);
+    return repo?.rootFS?.promises ?? null;
+  }, [repo, getDataGroupFs]);
+
+  // Load config-repo root level once
   useEffect(() => {
     if (!repo) return;
-    fsRef.current = repo.rootFS.promises;
     setLoading(true);
-    loadChildren(repo.rootFS.promises, '/')
-      .then(nodes => setRootNodes(nodes))
+    // 配置仓节点的作用域前缀为空串
+    loadChildren(repo.rootFS.promises, '/', '')
+      .then(nodes => setConfigNodes(nodes))
       .finally(() => setLoading(false));
   }, [repo]);
 
+  // 树根 = 配置仓节点 + 虚拟 “Data Groups” 节点
+  const rootNodes = useMemo<TreeNode[]>(() => {
+    const dataGroupsNode: TreeNode = {
+      name: 'Data Groups',
+      path: DATA_GROUPS_ROOT_PATH,
+      prefix: DATA_GROUPS_ROOT_PATH,
+      isDir: true,
+      loaded: true,
+      kind: 'data-groups',
+      children: dataGroups.map(g => ({
+        name: g.id,
+        path: makeDataGroupPath(g.id, '/'),
+        prefix: makeDataGroupPath(g.id, '/'),
+        isDir: true,
+        loaded: false,
+        children: [],
+        kind: 'data-group' as const,
+      })),
+    };
+    return [...configNodes, dataGroupsNode];
+  }, [configNodes, dataGroups]);
+
   const effectivePath = (params['*'] ? `/${params['*']}` : selectedPath) || '';
+  const scope = useMemo(() => parseDataGroupPath(effectivePath), [effectivePath]);
+  const fsPath = scope ? scope.inner : effectivePath;
 
   useEffect(() => {
     if (!repo || !effectivePath) return;
-    const fs = repo.rootFS.promises;
-    fs.stat(effectivePath).then(async (s: any) => {
+    const fs = resolveFs(effectivePath);
+    if (!fs) {
+      setContent('');
+      setOriginalContent('');
+      return;
+    }
+    fs.stat(fsPath).then(async (s: any) => {
       const isDir = s.mode !== undefined && (s.mode & 0o40000) === 0o40000;
       if (!isDir) {
-        return fs.readFile(effectivePath, 'utf-8');
+        return fs.readFile(fsPath, 'utf-8');
       }
       return null;
     }).then((text: string | null) => {
@@ -220,6 +276,12 @@ export default function FilesPage() {
       setOriginalContent('');
     });
 
+    // 数据组没有配置仓的 `.version` sidecar 体系 —— 跳过版本信息
+    if (scope) {
+      setVersionInfo(null);
+      return;
+    }
+
     // Load version info
     import('zen-fs-config').then(({ versionPathFor }) => {
       const vp = versionPathFor(effectivePath);
@@ -229,30 +291,37 @@ export default function FilesPage() {
         setVersionInfo(JSON.parse(str));
       }).catch(() => setVersionInfo(null));
     });
-  }, [repo, effectivePath]);
+  }, [repo, effectivePath, fsPath, scope, resolveFs]);
 
   const handleSelect = (path: string) => {
     const relative = path.startsWith('/') ? path.slice(1) : path;
     navigate(`/files/${relative}`);
   };
 
-  const isJson = effectivePath.endsWith('.json');
+  const isJson = fsPath.endsWith('.json');
 
   const handleSave = async () => {
     if (!repo || !effectivePath) return;
-    const fs = repo.rootFS.promises;
+    const fs = resolveFs(effectivePath);
+    if (!fs) return;
     setSaving(true);
     setMessage('');
     try {
-      const appId = repo.appId;
-      const isInAppDir = effectivePath.startsWith(`/${appId}/`);
-      if (isInAppDir) {
-        let data: unknown = content;
-        if (isJson) data = JSON.parse(content);
-        repo.setConfig(effectivePath.slice(`/${appId}`.length), data);
-      } else {
+      if (scope) {
+        // 数据组：直接写组 fs（没有 setConfig / 版本 sidecar 体系）
         const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
-        await fs.writeFile(effectivePath, data);
+        await fs.writeFile(fsPath, data);
+      } else {
+        const appId = repo.appId;
+        const isInAppDir = effectivePath.startsWith(`/${appId}/`);
+        if (isInAppDir) {
+          let data: unknown = content;
+          if (isJson) data = JSON.parse(content);
+          repo.setConfig(effectivePath.slice(`/${appId}`.length), data);
+        } else {
+          const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
+          await fs.writeFile(effectivePath, data);
+        }
       }
       setMessage('Saved');
       setOriginalContent(content);
@@ -284,10 +353,16 @@ export default function FilesPage() {
       setTimeout(() => setConfirmDelete(false), 3000);
       return;
     }
+    const fs = resolveFs(effectivePath);
+    if (!fs) return;
     setDeleting(true);
     setMessage('');
     try {
-      await repo.deleteFile(effectivePath);
+      if (scope) {
+        await fs.unlink(fsPath);
+      } else {
+        await repo.deleteFile(effectivePath);
+      }
       setMessage('Deleted');
       setContent('');
       setOriginalContent('');
@@ -313,13 +388,14 @@ export default function FilesPage() {
         {!loading && rootNodes.length === 0 && (
           <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 13 }}>No files</div>
         )}
-        <FileTree rootNodes={rootNodes} fs={fsRef.current} selected={selectedPath} onSelect={handleSelect} />
+        <FileTree rootNodes={rootNodes} resolveFs={resolveFs} selected={selectedPath} onSelect={handleSelect} />
       </div>
       <div className="split-pane-right">
         {effectivePath ? (
           <div className="editor-container">
             <div className="editor-toolbar">
               <span className="editor-path">{effectivePath}</span>
+              {scope && <span className="badge badge-primary" style={{ marginLeft: 8 }}>data group: {scope.groupId}</span>}
               {isJson && (
                 <button className="btn btn-sm btn-secondary" onClick={handleFormat}>Format</button>
               )}

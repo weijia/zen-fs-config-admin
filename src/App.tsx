@@ -5,6 +5,7 @@ import UpdateToast from './components/UpdateToast';
 import DashboardPage from './pages/DashboardPage';
 import FilesPage from './pages/FilesPage';
 import BackendsPage from './pages/BackendsPage';
+import DataGroupsPage from './pages/DataGroupsPage';
 import ConflictsPage from './pages/ConflictsPage';
 import NodesPage from './pages/NodesPage';
 
@@ -27,6 +28,7 @@ function AppRoutes() {
         <Route path="/files" element={<FilesPage />} />
         <Route path="/files/*" element={<FilesPage />} />
         <Route path="/backends" element={<BackendsPage />} />
+        <Route path="/data-groups" element={<DataGroupsPage />} />
         <Route path="/conflicts" element={<ConflictsPage />} />
         <Route path="/nodes" element={<NodesPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

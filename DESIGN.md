@@ -373,3 +373,74 @@ interface ConfigRepoContextValue {
 - F04: 配置搜索（全文搜索所有配置项）
 - F05: 导入/导出（从本地文件导入配置到仓库）
 - F06: 多语言支持（i18n）
+## 11. Data Sync Groups（数据同步组）
+
+> 需求见 [`REQUIREMENTS.md`](./REQUIREMENTS.md)，集成测试见
+> [`docs/integration-test.md`](./docs/integration-test.md)。
+
+### 11.1 为什么需要
+
+`zen-fs-config` 的数据同步组（`AppDataGroup`）只有被 `getAppDataGroup(id)`
+实例化时才会启动同步：`init()` 会建本地主副本 → 为每个后端建双向 `SyncPair`
+→ `syncAll()` → `watchAll()`。admin 此前从不调用这些方法，因此
+`appId='admin'` 下已配置的数据组完全不会被同步。
+
+### 11.2 Context 改动（`src/context/ConfigRepoContext.tsx`）
+
+```
+createRepo()
+   └─ createConfigRepo('admin')          ← 配置仓（既有）
+        └─ activateDataGroups(repo)      ← 新增
+             ├─ repo.listAppDataGroups()
+             └─ for each: repo.getAppDataGroup(id)   → 触发 init()（同步 + watch）
+```
+
+- `activateDataGroups(repo)` 是**纯函数**，便于单测注入假 repo。
+- `repo` 内部按 id 缓存实例，重复调用不会产生重复 `SyncPair`。
+- 单个组失败只记录 `error` 字段并继续，不阻断其它组与整体连接（错误隔离）。
+- 上下文新增：`dataGroups` / `dataGroupsLoading` / `dataGroupsError` /
+  `getDataGroupFs(id)` / `refreshDataGroups()`。
+- `reconnect()`：先 `disposeDataGroups(old)` + `oldRepo.dispose()`，
+  再在新 repo 上重新激活。
+- 组件卸载：`disposeDataGroups()` + `repo.dispose()`，避免泄漏。
+
+### 11.3 文件浏览器作用域（`src/pages/FilesPage.tsx`）
+
+树根同时承载两类内容，用保留前缀 `/@dg` 区分，从而复用现有 `/files/*` 路由
+与选中态：
+
+| 作用域 | 树路径 | 实际 fs | 组内路径 |
+|--------|--------|---------|----------|
+| 配置仓 | `/admin/foo.json` | `repo.rootFS.promises` | 同左 |
+| Data Groups 容器 | `/@dg` | — | — |
+| 某数据组 | `/@dg/<groupId>/x/y.json` | `getDataGroupFs(groupId)` | `/x/y.json` |
+
+- `resolveFs(path)` 按树路径解析 fs；`FileTree` / `TreeNodeView` 由原来接收
+  单个 `fs` 改为接收 `resolveFs`，`loadChildren(fs, dir)` 完全复用。
+- 虚拟节点 `kind: 'data-groups' | 'data-group'`，图标用 🗂️ 区分。
+- 数据组作用域**跳过** `.version` sidecar 查询（数据组无该体系）。
+- 保存：配置仓走 `repo.setConfig()` / `fs.writeFile()`；数据组只走
+  `fs.writeFile()`。
+
+### 11.4 管理页面（`src/pages/DataGroupsPage.tsx`）
+
+| 操作 | API |
+|------|-----|
+| 列表 | context `dataGroups` |
+| 创建组 | `repo.createAppDataGroup(id, backends)` |
+| 删除组 | `repo.removeAppDataGroup(id)` |
+| 组内加后端 | `group.addBackend(id, type, options, description)` |
+| 组内删后端 | `group.removeBackend(id)` |
+| 立即同步 | `group.flush()` |
+
+- 后端类型与表单元数据复用 `backend-types.ts`（`getBackendTypeDef` /
+  `getBackendTypes`），与 Backends 页一致。
+- 支持「复用配置同步后端的账号字段」（`accountBackendId`，下拉来自
+  `repo.listAccountBackends()`）。
+- 每次写操作后调用 `refreshDataGroups()` 刷新列表与文件树。
+
+### 11.5 状态与错误
+
+- 数据组激活是**异步且不阻塞首屏**的：连接建立后 `connected` 立即为 true，
+  数据组随后填充。
+- 激活失败在 `dataGroupsError` 汇总展示，同时每个组的 `error` 单列展示。
