@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import type { AppDataBackendDescriptor } from 'zen-fs-config';
 import { getBackendTypeDef, getBackendTypes } from '../backend-types';
+import { serializeBackend, deserializeBackend } from '../backend-config-string';
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:data-groups');
@@ -41,6 +42,38 @@ export default function DataGroupsPage() {
 
   const [accountBackends, setAccountBackends] = useState<{ id: string; type: string }[]>([]);
   const [busy, setBusy] = useState(false);
+
+  // 配置字符串导入（复制 / 粘贴，与配置同步组一致）
+  const [importStr, setImportStr] = useState('');
+  const [importError, setImportError] = useState('');
+
+  /** 把反序列化结果转成表单 draft（合并该类型默认值；含 accountBackendId）。 */
+  const parseToDraft = (parsed: ReturnType<typeof deserializeBackend>): BackendDraft | null => {
+    if (!parsed) return null;
+    const def = getBackendTypeDef(parsed.type);
+    if (!def) return null;
+    const options: Record<string, string> = { ...(def.defaultOptions ?? {}) } as Record<string, string>;
+    for (const [k, v] of Object.entries(parsed.options ?? {})) options[k] = v;
+    return {
+      id: parsed.id,
+      type: parsed.type,
+      options,
+      description: parsed.description ?? '',
+      accountBackendId: parsed.accountBackendId ?? '',
+    };
+  };
+
+  const handleImportDraft = (apply: (d: BackendDraft) => void) => {
+    setImportError('');
+    const parsed = deserializeBackend(importStr.trim());
+    const draft = parseToDraft(parsed);
+    if (!draft) {
+      setImportError(parsed ? `Unknown backend type: ${parsed.type}` : 'Invalid format. Expected: type:id:key=value,key=value');
+      return;
+    }
+    apply(draft);
+    setImportStr('');
+  };
 
   useEffect(() => {
     if (!repo) return;
@@ -315,17 +348,35 @@ export default function DataGroupsPage() {
                       return (
                         <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{b.id}</span>
-                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                            {bdef?.icon ?? '?'} {bdef?.label ?? b.type}
-                          </span>
-                          <button
-                            className="btn btn-sm btn-danger"
-                            onClick={() => handleRemoveBackend(g.id, b.id)}
-                            disabled={busy}
-                            title="Remove backend from group"
-                          >
-                            ✕
-                          </button>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        {bdef?.icon ?? '?'} {bdef?.label ?? b.type}
+                      </span>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => {
+                          const str = serializeBackend(b);
+                          try {
+                            navigator.clipboard.writeText(str).then(
+                              () => notify(`Copied: ${str}`),
+                              () => notify(`Config: ${str}`),
+                            );
+                          } catch {
+                            notify(`Config: ${str}`);
+                          }
+                        }}
+                        disabled={busy}
+                        title="Copy config string"
+                      >
+                        ⧉
+                      </button>
+                      <button
+                        className="btn btn-sm btn-danger"
+                        onClick={() => handleRemoveBackend(g.id, b.id)}
+                        disabled={busy}
+                        title="Remove backend from group"
+                      >
+                        ✕
+                      </button>
                         </div>
                       );
                     })}
@@ -387,6 +438,24 @@ export default function DataGroupsPage() {
               + Another backend
             </button>
 
+            <div className="form-group">
+              <label className="form-label">Import backend from string (optional, fills Backend 1)</label>
+              <textarea
+                className="form-input"
+                rows={2}
+                value={importStr}
+                onChange={e => setImportStr(e.target.value)}
+                placeholder="type:id:key=value,key=value,desc=...,accountBackendId=..."
+              />
+              <button
+                className="btn btn-sm btn-secondary"
+                onClick={() => handleImportDraft(d => setDrafts(prev => prev.length ? prev.map((x, i) => i === 0 ? d : x) : [d]))}
+              >
+                Apply
+              </button>
+              {importError && <p className="form-hint" style={{ color: 'var(--danger)' }}>{importError}</p>}
+            </div>
+
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setCreating(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={handleCreate} disabled={busy}>Create</button>
@@ -414,6 +483,23 @@ export default function DataGroupsPage() {
               },
               'add',
             )}
+            <div className="form-group">
+              <label className="form-label">Import from string (optional)</label>
+              <textarea
+                className="form-input"
+                rows={2}
+                value={importStr}
+                onChange={e => setImportStr(e.target.value)}
+                placeholder="type:id:key=value,key=value,desc=...,accountBackendId=..."
+              />
+              <button
+                className="btn btn-sm btn-secondary"
+                onClick={() => handleImportDraft(d => setAddDraft(prev => prev ? { ...prev, ...d } : prev))}
+              >
+                Apply
+              </button>
+              {importError && <p className="form-hint" style={{ color: 'var(--danger)' }}>{importError}</p>}
+            </div>
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => { setAddFor(null); setAddDraft(null); }}>Cancel</button>
               <button className="btn btn-primary" onClick={handleAddBackend} disabled={busy}>Add</button>
