@@ -27,68 +27,14 @@ function getOrCreateNodeId(): string {
 
 // ---------------------------------------------------------------------------
 // 数据同步组（app data group）
+//
+// 激活 / 释放逻辑抽到 ../data-group-activation，供多实例注册表复用。
+// 这里 re-export `activateDataGroups` 保持既有的 import 路径可用。
 // ---------------------------------------------------------------------------
 
-/** 一个已激活的数据同步组在 UI 侧的视图。 */
-export interface DataGroupInfo {
-  /** 组 id（等于 `.meta/app-data-groups/{appId}/{id}.json` 的文件名）。 */
-  id: string;
-  /** 组句柄；只在 context 内部使用，UI 通过下方字段与 helper 访问。 */
-  group: import('zen-fs-config').AppDataGroup;
-  /** 组内后端描述符。 */
-  backends: import('zen-fs-config').AppDataBackendDescriptor[];
-  /** 激活 / 同步过程中的错误（若有）。 */
-  error?: string;
-}
-
-/**
- * 枚举并激活某个 repo 下 `appId='admin'` 的全部数据同步组。
- *
- * `repo.getAppDataGroup(id)` 会实例化 `AppDataGroupImpl` 并触发
- * `init()`（建本地主副本 → 为每个后端建双向 SyncPair → syncAll → watchAll），
- * 因此调用它即完成「自动同步」。repo 内部按 id 缓存实例，
- * 重复调用不会产生重复 SyncPair。
- *
- * 单个组失败只记录错误，不影响其它组，也不影响配置仓连接。
- */
-export async function activateDataGroups(repo: IConfigRepo): Promise<DataGroupInfo[]> {
-  let descriptors: import('zen-fs-config').AppDataGroupDescriptor[];
-  try {
-    descriptors = await repo.listAppDataGroups();
-  } catch (err: any) {
-    log.warn('[data-groups] listAppDataGroups failed:', err?.message ?? err);
-    return [];
-  }
-
-  const infos: DataGroupInfo[] = [];
-  for (const desc of descriptors) {
-    try {
-      const group = await repo.getAppDataGroup(desc.id);
-      infos.push({ id: desc.id, group, backends: group.listBackends?.() ?? desc.backends ?? [] });
-      log.log(`[data-groups] activated "${desc.id}" (${(desc.backends ?? []).length} backend(s))`);
-    } catch (err: any) {
-      log.error(`[data-groups] failed to activate "${desc.id}":`, err?.message ?? err);
-      infos.push({
-        id: desc.id,
-        group: null as unknown as import('zen-fs-config').AppDataGroup,
-        backends: desc.backends ?? [],
-        error: err?.message ?? String(err),
-      });
-    }
-  }
-  return infos;
-}
-
-/** 释放一组激活过的数据组句柄（幂等）。 */
-async function disposeDataGroups(infos: DataGroupInfo[]): Promise<void> {
-  for (const info of infos) {
-    try {
-      await info.group?.dispose?.();
-    } catch {
-      /* already disposed */
-    }
-  }
-}
+import { activateDataGroups, disposeDataGroups, type DataGroupInfo } from '../data-group-activation';
+export { activateDataGroups };
+export type { DataGroupInfo };
 
 interface ConfigRepoContextValue {
   repo: IConfigRepo | null;

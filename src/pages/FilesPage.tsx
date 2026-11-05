@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
+import { useRepoInstances } from '../context/RepoInstancesContext';
+import AppInstanceManager from '../components/AppInstanceManager';
 import { DATA_GROUPS_ROOT_PATH, fsPathFor, makeDataGroupPath, parseDataGroupPath } from '../data-group-path';
 import {
   collectDataGroupOverview,
@@ -61,6 +63,14 @@ function highlightJson(text: string): string {
   return result;
 }
 
+interface TreeNodeAction {
+  label: string;
+  onClick: () => void;
+  tone?: 'primary' | 'secondary' | 'danger';
+  disabled?: boolean;
+  title?: string;
+}
+
 interface TreeNode {
   name: string;
   /** 树路径：配置仓即真实路径；数据组带 `/@dg/<groupId>` 前缀。 */
@@ -94,6 +104,13 @@ interface TreeNode {
   note?: string;
   /** 无法解析 / 激活失败时的红色徽标文案。 */
   problemBadge?: string;
+  /** 行内状态徽标（只读 / 实例已就绪 / 当前实例）。 */
+  statusBadge?: string;
+  statusTone?: 'muted' | 'success' | 'warning';
+  /** 该 appId 已有独立实例，该组可通过「组管理」编辑。 */
+  editable?: boolean;
+  /** 行内操作按钮（点击不触发节点选中 / 展开）。 */
+  actions?: TreeNodeAction[];
 }
 
 /**
@@ -106,6 +123,7 @@ function buildOverviewEntryNode(
   appId: string,
   entry: DataGroupOverviewEntry,
   getDataGroupFs: (id: string) => any,
+  managed: boolean,
 ): TreeNode {
   const label = entry.name ?? entry.id;
   const browseable =
@@ -133,8 +151,11 @@ function buildOverviewEntryNode(
   const notes: string[] = [];
   if (entry.problem) notes.push(entry.problem);
   else if (!entry.isDataSync) notes.push(`非 data-sync（${entry.groupType ?? '未知'}）：仅展示，不当作数据组`);
-  else if (appId !== ADMIN_APP_ID) notes.push('只读：跨 appId 总览，当前 repo 无对应组 fs');
-  else notes.push('只读：该组未激活');
+  else if (appId !== ADMIN_APP_ID) {
+    notes.push(managed
+      ? '独立实例已就绪：可在「组管理」里改名 / 改后端 / 删组；文件浏览仍只读'
+      : '只读：跨 appId 总览，点击左侧「管理（读写）」创建独立实例后可编辑组');
+  } else notes.push('只读：该组未激活');
 
   return {
     name: label,
@@ -149,6 +170,7 @@ function buildOverviewEntryNode(
     appIdBadge: appId,
     groupType: entry.groupType ?? undefined,
     note: notes.join('；'),
+    editable: managed && !entry.problem && entry.isDataSync,
     problemBadge: entry.problem
       ? (entry.problem.startsWith('激活失败') ? '未激活' : '无法解析')
       : undefined,
@@ -300,6 +322,40 @@ function TreeNodeView({ node, resolveFs, selected, onSelect, depth }: {
         {node.problemBadge && (
           <span className="badge badge-danger" style={{ marginLeft: 4, fontSize: 10, padding: '1px 6px' }}>{node.problemBadge}</span>
         )}
+        {node.statusBadge && (
+          <span
+            className={`badge ${node.statusTone === 'success' ? 'badge-success' : node.statusTone === 'warning' ? 'badge-warning' : ''}`}
+            style={{
+              marginLeft: 4,
+              fontSize: 10,
+              padding: '1px 6px',
+              ...(node.statusTone === 'muted'
+                ? { background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }
+                : {}),
+            }}
+          >
+            {node.statusBadge}
+          </span>
+        )}
+        {node.editable && (
+          <span className="badge badge-success" style={{ marginLeft: 4, fontSize: 10, padding: '1px 6px' }}>可编辑</span>
+        )}
+        {node.actions?.map(action => (
+          <button
+            key={action.label}
+            className={`btn btn-sm ${action.tone === 'danger' ? 'btn-danger' : action.tone === 'secondary' ? 'btn-secondary' : 'btn-primary'}`}
+            style={{ marginLeft: 6, fontSize: 10, padding: '2px 8px' }}
+            title={action.title}
+            disabled={action.disabled}
+            onClick={e => {
+              // 行内按钮不能触发节点的选中 / 展开
+              e.stopPropagation();
+              action.onClick();
+            }}
+          >
+            {action.label}
+          </button>
+        ))}
       </div>
       {expanded && children.length > 0 && (
         <div className="tree-children">
@@ -314,8 +370,17 @@ function TreeNodeView({ node, resolveFs, selected, onSelect, depth }: {
 
 export default function FilesPage() {
   const { repo, dataGroups, getDataGroupFs } = useConfigRepo();
+  const {
+    instances: instanceViews,
+    errors: instanceErrors,
+    creating: instanceCreating,
+    revision: instanceRevision,
+    createInstance,
+    releaseInstance,
+  } = useRepoInstances();
   const params = useParams();
   const navigate = useNavigate();
+  const [managerAppId, setManagerAppId] = useState<string | null>(null);
   const [configNodes, setConfigNodes] = useState<TreeNode[]>([]);
   const [treeVersion, setTreeVersion] = useState(0);
   const [overview, setOverview] = useState<DataGroupOverview>({ apps: [], total: 0 });
@@ -329,6 +394,28 @@ export default function FilesPage() {
   const [versionInfo, setVersionInfo] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const highlightRef = useRef<HTMLPreElement>(null);
+
+  const instanceByApp = useMemo(
+    () => new Map(instanceViews.map(view => [view.appId, view])),
+    [instanceViews],
+  );
+
+  /** 已创建 → 直接打开组管理面板；未创建 → 懒创建（失败原因由 context 记录并展示）。 */
+  const handleManage = useCallback(async (appId: string) => {
+    try {
+      await createInstance(appId);
+      setManagerAppId(appId);
+    } catch {
+      /* errors[appId] 已记录具体原因 */
+    }
+  }, [createInstance]);
+
+  /** 释放实例：flush → 断开 → 回只读。失败时保留实例并显示原因。 */
+  const handleRelease = useCallback((appId: string) => {
+    void releaseInstance(appId).catch(() => {
+      /* errors[appId] 已记录具体原因 */
+    });
+  }, [releaseInstance]);
 
   /** 按树路径解析出应该使用的 fs（配置仓 or 某个数据组）。 */
   const resolveFs = useCallback((path: string): any => {
@@ -370,7 +457,7 @@ export default function FilesPage() {
         }
       });
     return () => { cancelled = true; };
-  }, [repo]);
+  }, [repo, instanceRevision]);
 
   /**
    * 把总览条目转成树节点。
@@ -399,17 +486,56 @@ export default function FilesPage() {
     }
     apps.sort((a, b) => a.appId.localeCompare(b.appId));
 
-    return apps.map(app => ({
-      name: `${app.appId} (${app.entries.length})`,
-      path: makeOverviewAppPath(app.appId),
-      prefix: DATA_GROUPS_ROOT_PATH,
-      isDir: true,
-      loaded: true,
-      kind: 'data-groups-app' as const,
-      selectable: false,
-      children: app.entries.map(entry => buildOverviewEntryNode(app.appId, entry, getDataGroupFs)),
-    }));
-  }, [overview, dataGroups, getDataGroupFs]);
+    return apps.map(app => {
+      const isAdmin = app.appId === ADMIN_APP_ID;
+      const instance = instanceByApp.get(app.appId);
+      const isCreating = !!instanceCreating[app.appId];
+
+      let statusBadge: string;
+      let statusTone: TreeNode['statusTone'];
+      let actions: TreeNodeAction[] | undefined;
+      let note: string;
+
+      if (isAdmin) {
+        statusBadge = '当前实例';
+        statusTone = 'muted';
+        note = 'admin 自管理实例（启动即建）';
+      } else if (instance) {
+        statusBadge = `独立实例 · ${instance.status.groupCount} 组 · ${instance.status.watchingCount > 0 ? '同步中' : '未在同步'}`;
+        statusTone = 'success';
+        note = '使用独立实例，可释放';
+        actions = [
+          { label: '组管理', tone: 'primary', onClick: () => setManagerAppId(app.appId) },
+          { label: '释放', tone: 'danger', onClick: () => handleRelease(app.appId) },
+        ];
+      } else {
+        statusBadge = isCreating ? '创建中…' : '只读';
+        statusTone = isCreating ? 'warning' : 'muted';
+        note = '只读总览：点击「管理（读写）」懒创建独立实例';
+        actions = [{
+          label: isCreating ? '创建中…' : '管理（读写）',
+          tone: 'primary',
+          disabled: isCreating,
+          onClick: () => { void handleManage(app.appId); },
+        }];
+      }
+
+      return {
+        name: `${app.appId} (${app.entries.length})`,
+        path: makeOverviewAppPath(app.appId),
+        prefix: DATA_GROUPS_ROOT_PATH,
+        isDir: true,
+        loaded: true,
+        kind: 'data-groups-app' as const,
+        selectable: false,
+        statusBadge,
+        statusTone,
+        note,
+        actions,
+        children: app.entries.map(entry => buildOverviewEntryNode(app.appId, entry, getDataGroupFs, !isAdmin && !!instance)),
+      };
+    });
+  }, [overview, dataGroups, getDataGroupFs, instanceByApp, instanceCreating, handleManage, handleRelease]);
 
   // 树根 = 配置仓节点 + 虚拟 “Data Groups” 节点（无数据组时不渲染该容器）
   const rootNodes = useMemo<TreeNode[]>(() => {
@@ -580,12 +706,30 @@ export default function FilesPage() {
   const hasChanges = content !== originalContent;
 
   return (
+    <>
     <div className="split-pane">
       <div className="split-pane-left">
         {loading && <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 12 }}>Loading files...</div>}
         {overviewLoading && (
           <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 12 }}>Loading data groups...</div>
         )}
+        {Object.entries(instanceErrors).map(([appId, err]) => (
+          <div
+            key={appId}
+            style={{
+              margin: '8px 12px',
+              padding: '6px 8px',
+              borderRadius: 6,
+              background: 'var(--bg-tertiary)',
+              color: 'var(--danger)',
+              fontSize: 11,
+              lineHeight: 1.5,
+              wordBreak: 'break-word',
+            }}
+          >
+            <strong>{appId}</strong>：{err}
+          </div>
+        ))}
         {overviewLoaded && !overviewLoading && overviewAppNodes.length === 0 && (
           <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 12 }}>
             No data groups found in .config/ or .meta/
@@ -607,6 +751,9 @@ export default function FilesPage() {
           <div className="empty-state">
             <div className="icon">🔒</div>
             <p>只读总览条目：不可编辑、删除或进入浏览</p>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              组管理（改名 / 后端 / 删除）请在左侧 appId 分组节点点击「管理（读写）」/「组管理」。
+            </p>
           </div>
         ) : effectivePath ? (
           <div className="editor-container">
@@ -681,5 +828,9 @@ export default function FilesPage() {
         )}
       </div>
     </div>
+    {managerAppId && (
+      <AppInstanceManager appId={managerAppId} onClose={() => setManagerAppId(null)} />
+    )}
+    </>
   );
 }

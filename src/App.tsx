@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigRepoProvider, useConfigRepo } from './context/ConfigRepoContext';
+import { RepoInstancesProvider } from './context/RepoInstancesContext';
 import Layout from './components/Layout';
 import UpdateToast from './components/UpdateToast';
 import DashboardPage from './pages/DashboardPage';
@@ -41,7 +42,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <ConfigRepoProvider>
-        <AppRoutes />
+        <RepoInstancesProvider>
+          <AppRoutes />
+        </RepoInstancesProvider>
         <UpdateToast />
       </ConfigRepoProvider>
     </BrowserRouter>
