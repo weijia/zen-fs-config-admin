@@ -104,16 +104,25 @@ async function loadChildren(fs: any, dir: string, prefix = ''): Promise<TreeNode
   });
 }
 
-function FileTree({ rootNodes, resolveFs, selected, onSelect }: {
+function FileTree({ rootNodes, resolveFs, selected, onSelect, version }: {
   rootNodes: TreeNode[];
   resolveFs: (path: string) => any;
   selected: string;
   onSelect: (path: string) => void;
+  /** Bumped after deletes: remounts the tree so expanded dirs reload children. */
+  version: number;
 }) {
   return (
     <div className="file-tree">
       {rootNodes.map(n => (
-        <TreeNodeView key={n.path} node={n} resolveFs={resolveFs} selected={selected} onSelect={onSelect} depth={0} />
+        <TreeNodeView
+          key={`${n.path}#${version}`}
+          node={n}
+          resolveFs={resolveFs}
+          selected={selected}
+          onSelect={onSelect}
+          depth={0}
+        />
       ))}
     </div>
   );
@@ -192,6 +201,7 @@ export default function FilesPage() {
   const params = useParams();
   const navigate = useNavigate();
   const [configNodes, setConfigNodes] = useState<TreeNode[]>([]);
+  const [treeVersion, setTreeVersion] = useState(0);
   const [selectedPath, setSelectedPath] = useState('');
   const [content, setContent] = useState('');
   const [originalContent, setOriginalContent] = useState('');
@@ -367,6 +377,10 @@ export default function FilesPage() {
       setContent('');
       setOriginalContent('');
       setSelectedPath('');
+      // TreeNodeView caches children once expanded, so a deleted directory
+      // would otherwise stay visible until a full page reload.
+      setConfigNodes(await loadChildren(repo.rootFS.promises, '/', ''));
+      setTreeVersion(v => v + 1);
       navigate('/files');
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -388,7 +402,13 @@ export default function FilesPage() {
         {!loading && rootNodes.length === 0 && (
           <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 13 }}>No files</div>
         )}
-        <FileTree rootNodes={rootNodes} resolveFs={resolveFs} selected={selectedPath} onSelect={handleSelect} />
+        <FileTree
+          rootNodes={rootNodes}
+          resolveFs={resolveFs}
+          selected={selectedPath}
+          onSelect={handleSelect}
+          version={treeVersion}
+        />
       </div>
       <div className="split-pane-right">
         {effectivePath ? (
