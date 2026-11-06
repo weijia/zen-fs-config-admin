@@ -116,24 +116,24 @@ interface TreeNode {
 /**
  * 总览条目 → 树节点。
  *
- * 只有当前 appId（admin）且描述符有效、组已激活的数据组保持可浏览；
- * 其余（跨 appId / 坏 JSON / 非 data-sync / 未激活）均为只读节点。
+ * 只要能拿到组句柄（admin 自管理实例，或该 appId 的独立实例已创建并激活该组），
+ * 且描述符有效、类型为 data-sync，就保持可浏览 / 可编辑；
+ * 其余（坏 JSON / 非 data-sync / 组未激活 / 未创建实例）均为只读节点。
  */
 function buildOverviewEntryNode(
   appId: string,
   entry: DataGroupOverviewEntry,
-  getDataGroupFs: (id: string) => any,
+  getGroupFs: (appId: string, id: string) => any,
   managed: boolean,
 ): TreeNode {
   const label = entry.name ?? entry.id;
   const browseable =
-    appId === ADMIN_APP_ID &&
     entry.parsed &&
     entry.isDataSync &&
-    !!getDataGroupFs(entry.id);
+    !!getGroupFs(appId, entry.id);
 
   if (browseable) {
-    const groupPath = makeDataGroupPath(entry.id, '/');
+    const groupPath = makeDataGroupPath(appId, entry.id, '/');
     return {
       name: label,
       path: groupPath,
@@ -153,8 +153,8 @@ function buildOverviewEntryNode(
   else if (!entry.isDataSync) notes.push(`非 data-sync（${entry.groupType ?? '未知'}）：仅展示，不当作数据组`);
   else if (appId !== ADMIN_APP_ID) {
     notes.push(managed
-      ? '独立实例已就绪：可在「组管理」里改名 / 改后端 / 删组；文件浏览仍只读'
-      : '只读：跨 appId 总览，点击左侧「管理（读写）」创建独立实例后可编辑组');
+      ? '只读：该组未激活（可在「组管理」里查看失败原因）'
+      : '只读：尚未创建独立实例，点击左侧「管理（读写）」后可浏览 / 编辑文件');
   } else notes.push('只读：该组未激活');
 
   return {
@@ -369,7 +369,7 @@ function TreeNodeView({ node, resolveFs, selected, onSelect, depth }: {
 }
 
 export default function FilesPage() {
-  const { repo, dataGroups, getDataGroupFs } = useConfigRepo();
+  const { repo, dataGroups } = useConfigRepo();
   const {
     instances: instanceViews,
     errors: instanceErrors,
@@ -393,11 +393,42 @@ export default function FilesPage() {
   const [message, setMessage] = useState('');
   const [versionInfo, setVersionInfo] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  /** 当前选中节点是否为目录（决定新建文件 / 目录的落点）。 */
+  const [selectedIsDir, setSelectedIsDir] = useState(false);
   const highlightRef = useRef<HTMLPreElement>(null);
 
   const instanceByApp = useMemo(
     () => new Map(instanceViews.map(view => [view.appId, view])),
     [instanceViews],
+  );
+
+  /**
+   * 所有已激活数据组的句柄与组 fs（含懒创建实例的其它 appId）。
+   * 数据组 fs 由库的 chroot 视图提供，已通过 `hiddenPrefixes` 隐藏
+   * `.meta` / `.config`，因此这里不需要再过滤内部元数据。
+   */
+  const groupScopes = useMemo(() => {
+    const map = new Map<string, { group: any; fs: any }>();
+    const put = (appId: string, info: any) => {
+      const group = info.group;
+      const fs = group?.fs ? (group.fs.promises ?? group.fs) : null;
+      if (group && fs) map.set(`${appId}/${info.id}`, { group, fs });
+    };
+    for (const info of dataGroups) put(ADMIN_APP_ID, info);
+    for (const view of instanceViews) {
+      for (const info of view.groups) put(view.appId, info);
+    }
+    return map;
+  }, [dataGroups, instanceViews]);
+
+  const groupScopeFor = useCallback(
+    (appId: string, groupId: string) => groupScopes.get(`${appId}/${groupId}`) ?? null,
+    [groupScopes],
+  );
+
+  const getGroupFs = useCallback(
+    (appId: string, groupId: string) => groupScopeFor(appId, groupId)?.fs ?? null,
+    [groupScopeFor],
   );
 
   /** 已创建 → 直接打开组管理面板；未创建 → 懒创建（失败原因由 context 记录并展示）。 */
@@ -417,12 +448,12 @@ export default function FilesPage() {
     });
   }, [releaseInstance]);
 
-  /** 按树路径解析出应该使用的 fs（配置仓 or 某个数据组）。 */
+  /** 按树路径解析出应该使用的 fs（配置仓 or 任意已激活的数据组）。 */
   const resolveFs = useCallback((path: string): any => {
     const parsed = parseDataGroupPath(path);
-    if (parsed) return getDataGroupFs(parsed.groupId);
+    if (parsed) return getGroupFs(parsed.appId, parsed.groupId);
     return repo?.rootFS?.promises ?? null;
-  }, [repo, getDataGroupFs]);
+  }, [repo, getGroupFs]);
 
   // Load config-repo root level once
   useEffect(() => {
@@ -544,10 +575,10 @@ export default function FilesPage() {
         statusTone,
         note,
         actions,
-        children: app.entries.map(entry => buildOverviewEntryNode(app.appId, entry, getDataGroupFs, !isAdmin && !!instance)),
+        children: app.entries.map(entry => buildOverviewEntryNode(app.appId, entry, getGroupFs, !isAdmin && !!instance)),
       };
     });
-  }, [overview, dataGroups, getDataGroupFs, instanceByApp, instanceCreating, handleManage, handleRelease]);
+  }, [overview, dataGroups, getGroupFs, instanceByApp, instanceCreating, handleManage, handleRelease]);
 
   // 树根 = 配置仓节点 + 虚拟 “Data Groups” 节点（无数据组时不渲染该容器）
   const rootNodes = useMemo<TreeNode[]>(() => {
@@ -576,16 +607,19 @@ export default function FilesPage() {
       setContent('');
       setOriginalContent('');
       setVersionInfo(null);
+      setSelectedIsDir(false);
       return;
     }
     const fs = resolveFs(effectivePath);
     if (!fs) {
       setContent('');
       setOriginalContent('');
+      setSelectedIsDir(false);
       return;
     }
     fs.stat(fsPath).then(async (s: any) => {
       const isDir = s.mode !== undefined && (s.mode & 0o40000) === 0o40000;
+      setSelectedIsDir(isDir);
       if (!isDir) {
         return fs.readFile(fsPath, 'utf-8');
       }
@@ -604,6 +638,7 @@ export default function FilesPage() {
       }
     }).catch((err: any) => {
       log.warn('[FilesPage] load file error:', err.message);
+      setSelectedIsDir(false);
       setContent('');
       setOriginalContent('');
     });
@@ -632,6 +667,15 @@ export default function FilesPage() {
 
   const isJson = fsPath.endsWith('.json');
 
+  /** 写入 / 删除后主动 flush，确保改动被推送到该组的各个后端。 */
+  const flushGroup = useCallback(async (): Promise<number> => {
+    if (!scope) return 0;
+    const entry = groupScopeFor(scope.appId, scope.groupId);
+    if (!entry?.group?.flush) return 0;
+    const results = await entry.group.flush();
+    return Array.isArray(results) ? results.length : 0;
+  }, [scope, groupScopeFor]);
+
   const handleSave = async () => {
     if (!repo || !effectivePath) return;
     const fs = resolveFs(effectivePath);
@@ -643,6 +687,8 @@ export default function FilesPage() {
         // 数据组：直接写组 fs（没有 setConfig / 版本 sidecar 体系）
         const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
         await fs.writeFile(fsPath, data);
+        const synced = await flushGroup();
+        setMessage(synced ? `Saved（已触发同步：${synced} 个目标）` : 'Saved（已写入本地）');
       } else {
         const appId = repo.appId;
         const isInAppDir = effectivePath.startsWith(`/${appId}/`);
@@ -654,13 +700,41 @@ export default function FilesPage() {
           const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
           await fs.writeFile(effectivePath, data);
         }
+        setMessage('Saved');
       }
-      setMessage('Saved');
       setOriginalContent(content);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
     } finally {
       setSaving(false);
+      setTimeout(() => setMessage(''), 3000);
+    }
+  };
+
+  /** 在数据组里新建文件 / 目录；落点是当前选中的目录，否则是当前文件所在目录。 */
+  const handleCreate = async (kind: 'file' | 'dir') => {
+    if (!scope || !effectivePath) return;
+    const fs = resolveFs(effectivePath);
+    if (!fs) return;
+    const name = window.prompt(kind === 'dir' ? '新建目录名' : '新建文件名');
+    if (!name) return;
+    if (name === '.' || name === '..' || /[\\/]/.test(name)) {
+      setMessage('Error: 名称不能包含路径分隔符');
+      setTimeout(() => setMessage(''), 3000);
+      return;
+    }
+    const baseDir = selectedIsDir ? fsPath : (fsPath.replace(/\/[^/]*$/, '') || '/');
+    const target = `${baseDir === '/' ? '' : baseDir}/${name}`;
+    try {
+      if (kind === 'dir') await fs.mkdir(target);
+      else await fs.writeFile(target, '');
+      const synced = await flushGroup();
+      setTreeVersion(v => v + 1);
+      setMessage(synced ? `Created（已触发同步：${synced} 个目标）` : 'Created（已写入本地）');
+      handleSelect(makeDataGroupPath(scope.appId, scope.groupId, target));
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
       setTimeout(() => setMessage(''), 3000);
     }
   };
@@ -691,17 +765,23 @@ export default function FilesPage() {
     setMessage('');
     try {
       if (scope) {
-        await fs.unlink(fsPath);
+        // 删除必须走组 fs 的 unlink / rmdir，才能写墓碑并传播到各后端。
+        const st = await fs.stat(fsPath);
+        const isDir = st.mode !== undefined && (st.mode & 0o40000) === 0o40000;
+        if (isDir) await fs.rmdir(fsPath);
+        else await fs.unlink(fsPath);
+        const synced = await flushGroup();
+        setMessage(synced ? `Deleted（已触发同步：${synced} 个目标）` : 'Deleted（已写入本地）');
       } else {
         await repo.deleteFile(effectivePath);
+        setMessage('Deleted');
       }
-      setMessage('Deleted');
       setContent('');
       setOriginalContent('');
       setSelectedPath('');
       // TreeNodeView caches children once expanded, so a deleted directory
       // would otherwise stay visible until a full page reload.
-      setConfigNodes(await loadChildren(repo.rootFS.promises, '/', ''));
+      if (!scope) setConfigNodes(await loadChildren(repo.rootFS.promises, '/', ''));
       setTreeVersion(v => v + 1);
       navigate('/files');
     } catch (err: any) {
@@ -774,6 +854,12 @@ export default function FilesPage() {
               {scope && <span className="badge badge-primary" style={{ marginLeft: 8 }}>data group: {scope.groupId}</span>}
               {isJson && (
                 <button className="btn btn-sm btn-secondary" onClick={handleFormat}>Format</button>
+              )}
+              {scope && (
+                <>
+                  <button className="btn btn-sm btn-secondary" onClick={() => handleCreate('file')}>New File</button>
+                  <button className="btn btn-sm btn-secondary" onClick={() => handleCreate('dir')}>New Folder</button>
+                </>
               )}
               {hasChanges && (
                 <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>

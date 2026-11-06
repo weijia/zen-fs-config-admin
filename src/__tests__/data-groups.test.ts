@@ -166,24 +166,32 @@ describe('data group path helpers', () => {
   });
 
   it('C4-C5: parseDataGroupPath', () => {
-    expect(parseDataGroupPath('/@dg/g1/sub/a.txt')).toEqual({ groupId: 'g1', inner: '/sub/a.txt' });
-    expect(parseDataGroupPath('/@dg/g1')).toEqual({ groupId: 'g1', inner: '/' });
+    expect(parseDataGroupPath('/@dg/g1/sub/a.txt')).toEqual({ appId: 'admin', groupId: 'g1', inner: '/sub/a.txt' });
+    expect(parseDataGroupPath('/@dg/g1')).toEqual({ appId: 'admin', groupId: 'g1', inner: '/' });
+    expect(parseDataGroupPath('/@adg/dir-struct-gen/g1/a.txt')).toEqual({
+      appId: 'dir-struct-gen',
+      groupId: 'g1',
+      inner: '/a.txt',
+    });
     expect(parseDataGroupPath('/admin/a.json')).toBeNull();
   });
 
   it('C6-C7: makeDataGroupPath', () => {
-    expect(makeDataGroupPath('g1', '/sub/a.txt')).toBe('/@dg/g1/sub/a.txt');
-    expect(makeDataGroupPath('g1', '/')).toBe('/@dg/g1');
+    expect(makeDataGroupPath('admin', 'g1', '/sub/a.txt')).toBe('/@dg/g1/sub/a.txt');
+    expect(makeDataGroupPath('admin', 'g1', '/')).toBe('/@dg/g1');
+    expect(makeDataGroupPath('dir-struct-gen', 'g1', '/')).toBe('/@adg/dir-struct-gen/g1');
   });
 
   it('C8: 编解码往返一致', () => {
-    const cases: [string, string][] = [
-      ['g1', '/'],
-      ['g1', '/a.txt'],
-      ['group-2', '/deep/nested/file.json'],
+    const cases: [string, string, string][] = [
+      ['admin', 'g1', '/'],
+      ['admin', 'g1', '/a.txt'],
+      ['admin', 'group-2', '/deep/nested/file.json'],
+      ['dir-struct-gen', 'group-2', '/deep/nested/file.json'],
     ];
-    for (const [groupId, inner] of cases) {
-      const parsed = parseDataGroupPath(makeDataGroupPath(groupId, inner))!;
+    for (const [appId, groupId, inner] of cases) {
+      const parsed = parseDataGroupPath(makeDataGroupPath(appId, groupId, inner))!;
+      expect(parsed.appId).toBe(appId);
       expect(parsed.groupId).toBe(groupId);
       expect(parsed.inner).toBe(inner);
     }
