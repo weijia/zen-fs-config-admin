@@ -233,7 +233,7 @@ describe('RepoInstanceRegistry', () => {
     expect(registry.has('app-a')).toBe(false);
   });
 
-  it('创建失败：首次同步未完成（远端不可达）时抛出原因并 dispose', async () => {
+  it('创建失败：首次同步尚未完成时提示稍后重试，而不是归因凭据无效', async () => {
     const created: FakeRepo[] = [];
     const registry = new RepoInstanceRegistry({
       createRepo: async appId => {
@@ -244,7 +244,9 @@ describe('RepoInstanceRegistry', () => {
       getRemoteBackend: async () => REMOTE_BACKEND,
     });
 
-    await expect(registry.create('app-a')).rejects.toThrow(/未成功完成/);
+    const err = await registry.create('app-a').catch((e: Error) => e);
+    expect(err.message).toMatch(/首次同步尚未完成，请稍后重试/);
+    expect(err.message).not.toMatch(/凭据无效/);
     expect(created[0].dispose).toHaveBeenCalled();
     expect(registry.has('app-a')).toBe(false);
   });

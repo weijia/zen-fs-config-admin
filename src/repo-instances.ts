@@ -69,17 +69,20 @@ function assertRepoHealthy(repo: IConfigRepo): void {
   const backendStates = repo.getBackendSyncStates?.() ?? new Map();
   for (const state of backendStates.values()) {
     if (state.error) {
-      throw new Error(`远端后端「${state.backendId}」连接失败：${state.error.message}`);
+      // zen-fs-config >= 0.6.1 records real sync:error messages here
+      // (401/403/404/timeout); older versions only record connect failures.
+      throw new Error(`远端后端「${state.backendId}」同步失败：${state.error.message}`);
     }
   }
 
   // syncAll() 会吞掉单个同步对的异常；成功同步一定会写入 lastResult。
-  // flush 之后仍没有 lastResult 的对，视为首次同步未完成（远端不可达 / 凭据无效）。
+  // 没有 error 又没有 lastResult 时，只能说明首次同步尚未完成（可能仍在
+  // 进行中），不能断言凭据无效。
   const statuses = repo.getSyncStatuses?.() ?? new Map();
   for (const status of statuses.values()) {
     if (!status.lastResult) {
       throw new Error(
-        `同步「${status.targetName ?? status.pairId}」未成功完成：远端可能不可达或凭据无效`,
+        `同步「${status.targetName ?? status.pairId}」首次同步尚未完成，请稍后重试`,
       );
     }
   }
