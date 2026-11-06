@@ -245,6 +245,7 @@ describe('RepoInstanceRegistry', () => {
     });
 
     const err = await registry.create('app-a').catch((e: Error) => e);
+    if (!(err instanceof Error)) throw new Error('create() 未按预期抛出错误');
     expect(err.message).toMatch(/首次同步尚未完成，请稍后重试/);
     expect(err.message).not.toMatch(/凭据无效/);
     expect(created[0].dispose).toHaveBeenCalled();
