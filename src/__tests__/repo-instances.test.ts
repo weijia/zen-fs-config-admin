@@ -54,6 +54,8 @@ function makeFakeRepo(
     groups.set(desc.id, {
       id: desc.id,
       listBackends: () => backends,
+      listDeclaredBackends: () => backends,
+      getBackendSyncStates: () => new Map(backends.map(b => [b.id, { backendId: b.id, pairId: `pair-${b.id}` }])),
       addBackend: vi.fn(async (id: string, type: string, opts: Record<string, unknown>) => {
         calls.push(`group:${desc.id}:addBackend:${id}:${type}:${JSON.stringify(opts)}`);
         backends.push({ id, type, options: opts });

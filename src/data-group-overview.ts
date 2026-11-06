@@ -35,8 +35,14 @@ export interface DataGroupOverviewEntry {
   name: string | null;
   /** 描述符 `groupType`；缺失或无法解析时为 null。 */
   groupType: string | null;
-  /** 后端数量（`backends` 数组长度）。 */
+  /** 后端数量：优先取数据组自己的权威声明数，无权威来源时回退描述符里的引导副本。 */
   backendsCount: number;
+  /**
+   * `backendsCount` 的来源：
+   *   · `data-group`：来自组自己的 `.meta/backends/`（权威声明数）；
+   *   · `bootstrap`：来自配置组的引导副本 `backends` 字段（描述符可能滞后）。
+   */
+  backendsSource: 'data-group' | 'bootstrap';
   /** 命中布局：`config` 优先，`meta` 为 legacy。 */
   source: 'config' | 'meta';
   /** 描述符结构是否完整（JSON 可解析且 id/groupType 齐全）。 */
@@ -89,6 +95,7 @@ async function readDescriptor(
   id: string,
   source: 'config' | 'meta',
   path: string,
+  authoritativeCount?: number,
 ): Promise<DataGroupOverviewEntry> {
   const base: DataGroupOverviewEntry = {
     appId,
@@ -97,6 +104,7 @@ async function readDescriptor(
     name: null,
     groupType: null,
     backendsCount: 0,
+    backendsSource: 'bootstrap',
     source,
     parsed: false,
     isDataSync: false,
@@ -121,7 +129,11 @@ async function readDescriptor(
     descriptorId,
     groupType,
     name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : null,
-    backendsCount: Array.isArray(parsed.backends) ? parsed.backends.length : 0,
+    backendsCount:
+      typeof authoritativeCount === 'number'
+        ? authoritativeCount
+        : Array.isArray(parsed.backends) ? parsed.backends.length : 0,
+    backendsSource: typeof authoritativeCount === 'number' ? 'data-group' : 'bootstrap',
     parsed: descriptorId !== null && groupType !== null,
     isDataSync: groupType === 'data-sync',
   };
@@ -145,6 +157,7 @@ async function scanLayout(
   root: string,
   source: 'config' | 'meta',
   byApp: Map<string, Map<string, DataGroupOverviewEntry>>,
+  authoritativeCounts?: Map<string, number>,
 ): Promise<void> {
   let appIds: string[];
   try {
@@ -169,7 +182,14 @@ async function scanLayout(
       if (entries.has(id)) continue; // `.config` 已命中 → 忽略 legacy
       entries.set(
         id,
-        await readDescriptor(fs, appId, id, source, `${root}/${appId}/${file}`),
+        await readDescriptor(
+          fs,
+          appId,
+          id,
+          source,
+          `${root}/${appId}/${file}`,
+          authoritativeCounts?.get(`${appId}/${id}`),
+        ),
       );
     }
   }
@@ -179,13 +199,19 @@ async function scanLayout(
  * 读取仓库 fs 上的全部 appId 数据组描述符（只读）。
  *
  * @param fs 仓库根 fs（`repo.rootFS.promises` 或兼容对象）。
+ * @param authoritativeCounts 已激活组的权威声明数，键为 `${appId}/${id}`。
+ *   只有能拿到组句柄（`listDeclaredBackends()`）时才可能有值；缺失的条目回退
+ *   到描述符里的引导副本，并由 `backendsSource` 标明来源。
  */
-export async function collectDataGroupOverview(fs: any): Promise<DataGroupOverview> {
+export async function collectDataGroupOverview(
+  fs: any,
+  authoritativeCounts?: Map<string, number>,
+): Promise<DataGroupOverview> {
   if (!fs) return { apps: [], total: 0 };
 
   const byApp = new Map<string, Map<string, DataGroupOverviewEntry>>();
-  await scanLayout(fs, APP_DATA_GROUPS_DIR, 'config', byApp);
-  await scanLayout(fs, LEGACY_APP_DATA_GROUPS_DIR, 'meta', byApp);
+  await scanLayout(fs, APP_DATA_GROUPS_DIR, 'config', byApp, authoritativeCounts);
+  await scanLayout(fs, LEGACY_APP_DATA_GROUPS_DIR, 'meta', byApp, authoritativeCounts);
 
   const apps: DataGroupOverviewApp[] = Array.from(byApp.entries())
     .map(([appId, entries]) => ({

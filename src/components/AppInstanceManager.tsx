@@ -351,12 +351,22 @@ export default function AppInstanceManager({ appId, onClose }: { appId: string; 
               {(group.backends ?? []).map(backend => {
                 const def = getBackendTypeDef(backend.type);
                 const key = `${group.id}/${backend.id}`;
+                const state = (group.backendStates ?? []).find(s => s.backendId === backend.id);
                 return (
                   <div key={backend.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, fontSize: 12 }}>
                     <span style={{ fontFamily: 'var(--font-mono)' }}>{backend.id}</span>
                     <span style={{ color: 'var(--text-secondary)' }}>{def?.icon ?? '?'} {def?.label ?? backend.type}</span>
                     {backend.accountBackendId && (
                       <span className="badge" style={{ fontSize: 10, padding: '1px 6px' }}>账号复用：{backend.accountBackendId}</span>
+                    )}
+                    {!state?.pairId && (
+                      <span
+                        className="badge badge-danger"
+                        style={{ fontSize: 10, padding: '1px 6px' }}
+                        title={state?.error?.message ?? '未建立同步对'}
+                      >
+                        未连接
+                      </span>
                     )}
                     <button className="btn btn-sm btn-secondary" onClick={() => handleCopy(backend)} title="复制配置串">⧉</button>
                     <button className="btn btn-sm btn-secondary" onClick={() => openEdit(group.id, backend)} disabled={busy}>改参数</button>

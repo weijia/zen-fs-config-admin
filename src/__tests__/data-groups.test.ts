@@ -5,6 +5,7 @@ import type {
   AppDataGroup,
   AppDataGroupDescriptor,
   AppDataBackendDescriptor,
+  BackendSyncState,
 } from 'zen-fs-config';
 
 // ---------------------------------------------------------------------------
@@ -23,7 +24,11 @@ interface FakeGroup extends AppDataGroup {
   _backends: AppDataBackendDescriptor[];
 }
 
-function makeGroup(id: string, backends: AppDataBackendDescriptor[]): FakeGroup {
+function makeGroup(
+  id: string,
+  backends: AppDataBackendDescriptor[],
+  backendStates: BackendSyncState[] = backends.map(b => ({ backendId: b.id, pairId: `pair-${b.id}` })),
+): FakeGroup {
   const state = { disposed: 0, backends };
   return {
     groupId: id,
@@ -31,20 +36,26 @@ function makeGroup(id: string, backends: AppDataBackendDescriptor[]): FakeGroup 
     fs: { promises: { readdir: async () => [`${id}-file.txt`] } },
     get disposed() { return state.disposed; },
     getSyncStatuses: () => new Map(),
+    getBackendSyncStates: () => new Map(backendStates.map(s => [s.backendId, s])),
     flush: async () => [],
     dispose: async () => { state.disposed++; },
     addBackend: async () => {},
     removeBackend: async () => {},
-    listBackends: () => state.backends,
+    listBackends: () => state.backends.filter(b => backendStates.find(s => s.backendId === b.id)?.pairId),
+    listDeclaredBackends: () => state.backends,
   } as unknown as FakeGroup;
 }
 
 function makeFakeRepo(
   descriptors: AppDataGroupDescriptor[],
-  opts: { failActivate?: string[]; failList?: boolean } = {},
+  opts: {
+    failActivate?: string[];
+    failList?: boolean;
+    backendStates?: Record<string, BackendSyncState[]>;
+  } = {},
 ) {
   const groups = new Map<string, FakeGroup>();
-  for (const d of descriptors) groups.set(d.id, makeGroup(d.id, d.backends));
+  for (const d of descriptors) groups.set(d.id, makeGroup(d.id, d.backends, opts.backendStates?.[d.id]));
 
   const calls = { list: 0, get: [] as string[] };
 
@@ -78,7 +89,7 @@ describe('activateDataGroups', () => {
     expect(repo.calls.list).toBe(1);
   });
 
-  it('A2: 枚举并激活每个组，backends 来自 listBackends()', async () => {
+  it('A2: 枚举并激活每个组，backends 来自 listDeclaredBackends()', async () => {
     const repo = makeFakeRepo([
       { id: 'g1', groupType: 'data-sync', backends: [makeBackend('b1')] },
       { id: 'g2', groupType: 'data-sync', backends: [makeBackend('b2'), makeBackend('b3')] },
@@ -113,6 +124,25 @@ describe('activateDataGroups', () => {
   it('A4: listAppDataGroups 抛错时返回空数组而不向上抛', async () => {
     const repo = makeFakeRepo([], { failList: true });
     await expect(activateDataGroups(repo as any)).resolves.toEqual([]);
+  });
+
+  it('A6: 声明但未连上的后端仍在 backends 中，并在 backendStates 带 error', async () => {
+    const repo = makeFakeRepo(
+      [{ id: 'g1', groupType: 'data-sync', backends: [makeBackend('b1'), makeBackend('b2')] }],
+      {
+        backendStates: {
+          g1: [
+            { backendId: 'b1', pairId: 'pair-b1' },
+            { backendId: 'b2', error: { message: 'unreachable', timestamp: 1 } },
+          ],
+        },
+      },
+    );
+    const result = await activateDataGroups(repo as any);
+
+    // 声明视图：即使 b2 未连上也不能少显示
+    expect(result[0].backends.map(b => b.id)).toEqual(['b1', 'b2']);
+    expect(result[0].backendStates.find(s => s.backendId === 'b2')?.error?.message).toBe('unreachable');
   });
 
   it('A5: 返回的 group 句柄就是 repo 缓存的实例（不会重复创建 SyncPair）', async () => {

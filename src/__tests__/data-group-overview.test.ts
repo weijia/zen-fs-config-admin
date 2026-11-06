@@ -112,6 +112,51 @@ describe('collectDataGroupOverview 布局优先级', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 权威声明数优先，引导副本回退
+// ---------------------------------------------------------------------------
+
+describe('collectDataGroupOverview 后端数量来源', () => {
+  it('有权威声明数时优先使用，并标记 backendsSource=data-group', async () => {
+    const fs = makeFakeFs({
+      [config('admin', 'g1.json')]: descriptor('g1', { name: 'G1', backends: [{ id: 'stale' }] }),
+    });
+
+    const overview = await collectDataGroupOverview(
+      fs.promises,
+      new Map([['admin/g1', 3]]),
+    );
+
+    expect(overview.apps[0].entries[0]).toMatchObject({
+      id: 'g1',
+      backendsCount: 3,
+      backendsSource: 'data-group',
+    });
+  });
+
+  it('权威声明数为 0 时不被引导副本覆盖', async () => {
+    const fs = makeFakeFs({
+      [config('admin', 'g1.json')]: descriptor('g1', { backends: [{ id: 'stale' }] }),
+    });
+
+    const overview = await collectDataGroupOverview(fs.promises, new Map([['admin/g1', 0]]));
+    expect(overview.apps[0].entries[0]).toMatchObject({ backendsCount: 0, backendsSource: 'data-group' });
+  });
+
+  it('无权威来源时回退引导副本，并标记 backendsSource=bootstrap', async () => {
+    const fs = makeFakeFs({
+      [config('admin', 'g1.json')]: descriptor('g1', { backends: [{ id: 'b1' }, { id: 'b2' }] }),
+    });
+
+    const overview = await collectDataGroupOverview(fs.promises);
+    expect(overview.apps[0].entries[0]).toMatchObject({ backendsCount: 2, backendsSource: 'bootstrap' });
+
+    // 只命中的其它 appId 不应被误用为权威来源
+    const partial = await collectDataGroupOverview(fs.promises, new Map([['other/g1', 5]]));
+    expect(partial.apps[0].entries[0]).toMatchObject({ backendsCount: 2, backendsSource: 'bootstrap' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 容错：坏 JSON / 缺字段 / 读取失败
 // ---------------------------------------------------------------------------
 

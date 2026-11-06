@@ -444,7 +444,18 @@ export default function FilesPage() {
     }
     let cancelled = false;
     setOverviewLoading(true);
-    collectDataGroupOverview(repo.rootFS.promises)
+    // 已激活的组能拿到权威声明数（`listDeclaredBackends()`）；其余条目由
+    // `collectDataGroupOverview` 回退到描述符里的引导副本，并标注来源。
+    const authoritativeCounts = new Map<string, number>();
+    for (const g of dataGroups) {
+      if (!g.error) authoritativeCounts.set(`${ADMIN_APP_ID}/${g.id}`, g.backends?.length ?? 0);
+    }
+    for (const view of instanceViews) {
+      for (const g of view.groups) {
+        if (!g.error) authoritativeCounts.set(`${view.appId}/${g.id}`, g.backends?.length ?? 0);
+      }
+    }
+    collectDataGroupOverview(repo.rootFS.promises, authoritativeCounts)
       .then(res => { if (!cancelled) setOverview(res); })
       .catch((err: any) => {
         log.warn('[FilesPage] data group overview failed:', err?.message ?? err);
@@ -457,7 +468,7 @@ export default function FilesPage() {
         }
       });
     return () => { cancelled = true; };
-  }, [repo, instanceRevision]);
+  }, [repo, instanceRevision, dataGroups, instanceViews]);
 
   /**
    * 把总览条目转成树节点。
@@ -477,6 +488,7 @@ export default function FilesPage() {
           name: null,
           groupType: g.error ? null : 'data-sync',
           backendsCount: g.backends?.length ?? 0,
+          backendsSource: 'data-group',
           source: 'config',
           parsed: !g.error,
           isDataSync: !g.error,

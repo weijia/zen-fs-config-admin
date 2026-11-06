@@ -335,6 +335,7 @@ export default function DataGroupsPage() {
               const statuses = g.group ? Array.from(g.group.getSyncStatuses().values()) : [];
               const watching = statuses.filter(s => s.watching).length;
               const backends = g.backends ?? [];
+              const backendStates = new Map((g.backendStates ?? []).map(s => [s.backendId, s]));
               return (
                 <tr key={g.id}>
                   <td style={{ fontFamily: 'var(--font-mono)' }}>
@@ -351,6 +352,14 @@ export default function DataGroupsPage() {
                       <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                         {bdef?.icon ?? '?'} {bdef?.label ?? b.type}
                       </span>
+                      {!backendStates.get(b.id)?.pairId && (
+                        <span
+                          className="badge badge-danger"
+                          title={backendStates.get(b.id)?.error?.message ?? '未建立同步对'}
+                        >
+                          未连接
+                        </span>
+                      )}
                       <button
                         className="btn btn-sm btn-secondary"
                         onClick={() => {
