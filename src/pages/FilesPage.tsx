@@ -496,7 +496,7 @@ export default function FilesPage() {
             <div className="editor-toolbar">
               <span className="editor-path">{effectivePath}</span>
               <span className="badge badge-primary" style={{ marginLeft: 8 }}>
-                {selected.kind === 'config' ? `config:${selected.appId}` : `data group: ${selected.groupId}`}
+                {selected.kind === 'config' ? 'config' : `data group: ${selected.groupId}`}
               </span>
               {isJson && (
                 <button className="btn btn-sm btn-secondary" onClick={handleFormat}>Format</button>
@@ -579,5 +579,5 @@ export default function FilesPage() {
 }
 
 function selectedKeyLabel(ref: { kind: string; appId: string; groupId: string | null }): string {
-  return ref.kind === 'config' ? `${ref.appId} 配置组` : `${ref.appId} / ${ref.groupId}`;
+  return ref.kind === 'config' ? '配置同步组' : `${ref.appId} / ${ref.groupId}`;
 }

@@ -644,6 +644,19 @@ tr:hover td { background: var(--bg-tertiary); }
 .sync-target-row:hover { background: var(--bg-tertiary); }
 .sync-target-row.active { background: var(--accent-bg); }
 
+.sync-target-section-hint {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* 描述符解析失败的数据组：列出但不可打开。 */
+.sync-target-row.invalid { cursor: not-allowed; }
+.sync-target-row.invalid:hover { background: transparent; }
+.sync-target-row.invalid .sync-target-detail { color: var(--danger); }
+
 .sync-target-appid {
   font-family: var(--font-mono);
   font-size: 11px;
