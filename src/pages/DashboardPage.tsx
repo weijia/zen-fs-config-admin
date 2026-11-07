@@ -1,11 +1,22 @@
 import { useEffect, useState, useRef } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
+import { useSyncTarget } from '../context/SyncTargetContext';
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:dashboard');
 
 export default function DashboardPage() {
-  const { repo } = useConfigRepo();
+  // Node ID 等 admin 级信息固定取 admin 配置组；同步状态 / flush / 冲突跟随当前 target。
+  const { repo: adminRepo } = useConfigRepo();
+  const {
+    handle,
+    ready,
+    selected,
+    selectedOption,
+    getSyncStatuses,
+    flushTarget,
+    conflicts: reader,
+  } = useSyncTarget();
   const [conflicts, setConflicts] = useState<any[]>([]);
   const [flushResult, setFlushResult] = useState<any[]>([]);
   const [flushing, setFlushing] = useState(false);
@@ -16,14 +27,14 @@ export default function DashboardPage() {
   const prevTotalSyncsRef = useRef(0);
 
   useEffect(() => {
-    if (!repo) return;
-    repo.listConflicts().then(setConflicts).catch(() => {});
-  }, [repo]);
+    if (!reader) return;
+    reader.listConflicts().then(setConflicts).catch(() => {});
+  }, [reader]);
 
   // Log sync status changes every 3s
   useEffect(() => {
-    if (!repo) return;
-    const statuses = repo.getSyncStatuses();
+    if (!ready) return;
+    const statuses = getSyncStatuses();
     const pairs = Array.from(statuses.entries());
     const totalSyncs = pairs.reduce((sum, [, s]) => sum + s.totalSyncs, 0);
 
@@ -40,25 +51,43 @@ export default function DashboardPage() {
       });
       prevTotalSyncsRef.current = totalSyncs;
     }
-  }, [repo, refreshKey]);
+  }, [ready, getSyncStatuses, refreshKey]);
 
-  if (!repo) return <div className="loading">No repo connected</div>;
+  if (!ready) {
+    return (
+      <div>
+        <div className="page-header"><h1 className="page-title">Dashboard</h1></div>
+        <div className="empty-state">
+          <p>{selectedOption?.label ?? `${selected.appId} / ${selected.groupId ?? ''}`} 尚未打开</p>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            同步状态跟随当前选中的同步组；组打开后这里会显示该组的同步对与结果。
+          </p>
+        </div>
+      </div>
+    );
+  }
 
-  const statuses = repo.getSyncStatuses();
+  const statuses = getSyncStatuses();
   const pairs = Array.from(statuses.entries());
   const watching = pairs.filter(([, s]) => s.watching).length;
   const idle = pairs.filter(([, s]) => s.state === 'idle').length;
   const totalSyncs = pairs.reduce((sum, [, s]) => sum + s.totalSyncs, 0);
   const unresolvedConflicts = conflicts.filter(c => !c.resolvedContent);
 
+  /**
+   * 逐对 sync / 诊断依赖 ConfigRepo 的 syncEngine；数据组只有组级 flush。
+   * 这里统一从当前 target 的 handle 取，避免误用 admin repo 的引擎。
+   */
+  const targetEngine = ready ? (handle as any)?.syncEngine : null;
+
   const handleFlush = async () => {
     setFlushing(true);
     try {
       log.log('[sync-data] flush start');
-      const results = await repo.flush();
+      const results = await flushTarget();
       log.log('[sync-data] flush done, results:', JSON.stringify(results));
-      setFlushResult(results);
-      repo.listConflicts().then(setConflicts).catch(() => {});
+      setFlushResult(results as any[]);
+      reader?.listConflicts().then(setConflicts).catch(() => {});
     } catch (err) {
       log.error('[sync-data] flush failed:', err);
     } finally {
@@ -67,15 +96,14 @@ export default function DashboardPage() {
   };
 
   const handleSyncPair = async (pairId: string) => {
-    // @ts-ignore
-    const engine = repo?.syncEngine;
+    const engine = targetEngine;
     if (!engine) return;
     setSyncingPair(pairId);
     try {
       log.log('[sync-data] manual sync start:', pairId);
       const result = await engine.sync(pairId);
       log.log('[sync-data] manual sync done:', pairId, result);
-      repo.listConflicts().then(setConflicts).catch(() => {});
+      reader?.listConflicts().then(setConflicts).catch(() => {});
     } catch (err) {
       log.error('[sync-data] manual sync failed:', pairId, err);
     } finally {
@@ -92,10 +120,9 @@ export default function DashboardPage() {
     setDiagRunning(true);
     setDiagResult(null);
     try {
-      // @ts-ignore
-      const engine = repo?.syncEngine;
+      const engine = targetEngine;
       if (!engine) {
-        setDiagResult({ error: 'No sync engine available' });
+        setDiagResult({ error: '当前同步组不支持逐对诊断（数据组只有组级 flush）' });
         return;
       }
       const pairsMap = (engine as any).pairs || (engine as any)._pairs;
@@ -157,8 +184,7 @@ export default function DashboardPage() {
   const handleForceFullSync = async () => {
     setDiagRunning(true);
     try {
-      // @ts-ignore
-      const engine = repo?.syncEngine;
+      const engine = (handle as any)?.syncEngine;
       if (!engine) return;
       const pairsMap = (engine as any).pairs || (engine as any)._pairs;
       if (!pairsMap) return;
@@ -170,7 +196,7 @@ export default function DashboardPage() {
         log.log(`[diag] force full sync done: ${pairId}`, result);
       }
       setRefreshKey(k => k + 1);
-      repo.listConflicts().then(setConflicts).catch(() => {});
+      reader?.listConflicts().then(setConflicts).catch(() => {});
     } catch (err) {
       log.error('[diag] force full sync failed:', err);
     } finally {
@@ -181,12 +207,18 @@ export default function DashboardPage() {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Dashboard</h1>
+        <div>
+          <h1 className="page-title">Dashboard</h1>
+          <p className="form-hint" style={{ marginTop: 2 }}>
+            同步状态跟随顶栏选中的组：{selectedOption?.label ?? `${selected.appId} / ${selected.groupId ?? ''}`}
+            {!targetEngine && '（数据组仅支持组级 flush）'}
+          </p>
+        </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-secondary" onClick={handleDiagnose} disabled={diagRunning}>
+          <button className="btn btn-secondary" onClick={handleDiagnose} disabled={diagRunning || !targetEngine} title={targetEngine ? '' : '数据组只能整组 flush'}>
             {diagRunning ? 'Running...' : 'Diagnose'}
           </button>
-          <button className="btn btn-secondary" onClick={handleForceFullSync} disabled={diagRunning}>
+          <button className="btn btn-secondary" onClick={handleForceFullSync} disabled={diagRunning || !targetEngine} title={targetEngine ? '' : '数据组只能整组 flush'}>
             Force Full Sync
           </button>
           <button className="btn btn-primary" onClick={handleFlush} disabled={flushing}>
@@ -213,9 +245,9 @@ export default function DashboardPage() {
           <div className="stat-label">{conflicts.length} total</div>
         </div>
         <div className="card">
-          <div className="card-title">Node ID</div>
+          <div className="card-title">Node ID (admin)</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, wordBreak: 'break-all' }}>
-            {repo.nodeId}
+            {adminRepo?.nodeId ?? '(admin 未连接)'}
           </div>
         </div>
       </div>
@@ -313,7 +345,8 @@ export default function DashboardPage() {
                 <button
                   className="btn btn-sm btn-secondary"
                   onClick={() => handleSyncPair(id)}
-                  disabled={syncingPair === id || s.state === 'syncing'}
+                  disabled={!targetEngine || syncingPair === id || s.state === 'syncing'}
+                  title={targetEngine ? '手动同步该对' : '数据组只能整组 flush'}
                 >
                   {syncingPair === id ? 'Syncing...' : 'Sync Now'}
                 </button>

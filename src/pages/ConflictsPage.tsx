@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useConfigRepo } from '../context/ConfigRepoContext';
+import { useSyncTarget } from '../context/SyncTargetContext';
+import { targetKindLabel } from '../sync-target';
 import type { ConflictArchive } from 'zen-fs-config';
 
 export default function ConflictsPage() {
-  const { repo } = useConfigRepo();
+  const { conflicts: reader, ready, selected: target, selectedOption } = useSyncTarget();
   const [conflicts, setConflicts] = useState<ConflictArchive[]>([]);
   const [selected, setSelected] = useState<ConflictArchive | null>(null);
   const [sourceContent, setSourceContent] = useState<string>('');
@@ -14,26 +15,31 @@ export default function ConflictsPage() {
   const [loadingBackup, setLoadingBackup] = useState(false);
 
   const loadConflicts = useCallback(async () => {
-    if (!repo) return;
-    try { const list = await repo.listConflicts(); setConflicts(list); } catch { /* ignore */ }
-  }, [repo]);
+    if (!reader) return;
+    try { const list = await reader.listConflicts(); setConflicts(list); } catch { /* ignore */ }
+  }, [reader]);
 
-  useEffect(() => { loadConflicts(); }, [loadConflicts]);
+  // 切换 target 后清空并重新读取该组的冲突存档。
+  useEffect(() => {
+    setConflicts([]);
+    setSelected(null);
+    loadConflicts();
+  }, [loadConflicts]);
 
   const loadConflictBackups = useCallback(async (c: ConflictArchive) => {
-    if (!repo || !c.sourceBackupPath) return;
+    if (!reader || !c.sourceBackupPath) return;
     setLoadingBackup(true);
     try {
       const conflictId = getConflictId(c);
       const [src, tgt] = await Promise.all([
-        repo.readConflictBackup(conflictId, 'source').catch(() => '(failed to load)'),
-        repo.readConflictBackup(conflictId, 'target').catch(() => '(failed to load)'),
+        reader.readConflictBackup(conflictId, 'source').catch(() => '(failed to load)'),
+        reader.readConflictBackup(conflictId, 'target').catch(() => '(failed to load)'),
       ]);
       setSourceContent(src);
       setTargetContent(tgt);
 
       if (c.resolvedBackupPath) {
-        const res = await repo.readConflictBackup(conflictId, 'resolved').catch(() => '');
+        const res = await reader.readConflictBackup(conflictId, 'resolved').catch(() => '');
         setResolvedContent(res);
       } else {
         setResolvedContent('');
@@ -43,7 +49,7 @@ export default function ConflictsPage() {
     } finally {
       setLoadingBackup(false);
     }
-  }, [repo]);
+  }, [reader]);
 
   useEffect(() => {
     if (selected) loadConflictBackups(selected);
@@ -53,23 +59,45 @@ export default function ConflictsPage() {
     `${c.timestamp}_${c.conflictPath.replace(/\//g, '_')}/meta.json`;
 
   const handleResolve = async () => {
-    if (!repo || !selected) return;
+    if (!reader || !selected) return;
     try {
       let data: unknown;
       try { data = JSON.parse(mergeText); } catch { data = mergeText; }
-      await repo.resolveConflict(getConflictId(selected), data);
+      await reader.resolveConflict(getConflictId(selected), data);
       setMessage('Resolved'); setSelected(null); await loadConflicts();
     } catch (err: any) { setMessage(`Error: ${err.message}`); }
     setTimeout(() => setMessage(''), 3000);
   };
 
-  if (!repo) return <div className="loading">No repo connected</div>;
+  if (!ready) {
+    return (
+      <div>
+        <div className="page-header">
+          <h1 className="title">Conflicts</h1>
+        </div>
+        <div className="empty-state">
+          <p>{selectedOption?.label ?? `${target.appId} / ${target.groupId ?? ''}`} 尚未打开</p>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            冲突存档跟随当前选中的同步组；组打开后这里会显示该组的冲突。
+          </p>
+        </div>
+      </div>
+    );
+  }
   const unresolved = conflicts.filter(c => !c.resolvedBackupPath);
 
   return (
     <div>
       <div className="page-header">
-        <h1 className="title">Conflicts</h1>
+        <div>
+          <h1 className="title">Conflicts</h1>
+          <p className="form-hint" style={{ marginTop: 2 }}>
+            <span className={`badge ${target.kind === 'config' ? 'badge-primary' : 'badge-success'}`} style={{ marginRight: 6 }}>
+              {targetKindLabel(target)}
+            </span>
+            {selectedOption?.label ?? selectedKeyFallback(target)} · {target.appId}
+          </p>
+        </div>
         <span className="badge badge-warning">{unresolved.length} unresolved</span>
       </div>
       {message && <div style={{ marginBottom: 16, color: message.includes('Error') ? 'var(--danger)' : 'var(--success)', fontSize: 13 }}>{message}</div>}
@@ -147,4 +175,8 @@ export default function ConflictsPage() {
       )}
     </div>
   );
+}
+
+function selectedKeyFallback(ref: { kind: string; appId: string; groupId: string | null }): string {
+  return ref.kind === 'config' ? `${ref.appId} 配置组` : `${ref.appId} / ${ref.groupId}`;
 }

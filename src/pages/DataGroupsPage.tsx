@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
-import type { AppDataBackendDescriptor } from 'zen-fs-config';
+import { useRepoInstances } from '../context/RepoInstancesContext';
+import { useSyncTarget } from '../context/SyncTargetContext';
+import type { AppDataBackendDescriptor, AppDataGroupDescriptor } from 'zen-fs-config';
+import type { DataGroupInfo } from '../data-group-activation';
 import { getBackendTypeDef, getBackendTypes } from '../backend-types';
 import { serializeBackend, deserializeBackend } from '../backend-config-string';
 import { createLogger } from '@richard432/localstorage-logger';
@@ -29,7 +32,19 @@ function emptyDraft(index: number): BackendDraft {
 }
 
 export default function DataGroupsPage() {
-  const { repo, dataGroups, dataGroupsLoading, dataGroupsError, refreshDataGroups } = useConfigRepo();
+  const { repo: adminRepo, dataGroups: adminGroups, dataGroupsLoading, dataGroupsError, refreshDataGroups } = useConfigRepo();
+  const { errors: instanceErrors, revision, getInstance, refreshInstance, activateGroup } = useRepoInstances();
+  const { selected } = useSyncTarget();
+
+  /** 页面跟随选中 target 的 appId（不跟随组）；admin 固定用自身 repo。 */
+  const appId = selected.appId;
+  const isAdmin = appId === 'admin';
+  const instance = isAdmin ? null : getInstance(appId);
+  const repo = isAdmin ? adminRepo : (instance?.repo ?? null);
+  const dataGroups = useMemo(
+    () => ((isAdmin ? adminGroups : (instance?.groups ?? [])) as DataGroupInfo[]),
+    [isAdmin, adminGroups, instance?.groups],
+  );
 
   const [message, setMessage] = useState('');
   const [creating, setCreating] = useState(false);
@@ -81,6 +96,48 @@ export default function DataGroupsPage() {
       setAccountBackends(list.map(b => ({ id: b.id, type: b.type })));
     }).catch(() => setAccountBackends([]));
   }, [repo]);
+
+  // 描述符列表：未激活的组也要展示（Data Groups 按 appId 跟随，不按组）。
+  const [descriptors, setDescriptors] = useState<AppDataGroupDescriptor[]>([]);
+  useEffect(() => {
+    if (!repo) { setDescriptors([]); return; }
+    let cancelled = false;
+    repo.listAppDataGroups()
+      .then(list => { if (!cancelled) setDescriptors(list); })
+      .catch(() => { if (!cancelled) setDescriptors([]); });
+    return () => { cancelled = true; };
+  }, [repo, revision, appId]);
+
+  const refreshActive = useCallback(async () => {
+    if (isAdmin) await refreshDataGroups();
+    else if (repo) await refreshInstance(appId);
+  }, [isAdmin, refreshDataGroups, refreshInstance, appId, repo]);
+
+  /** 组未激活时按需激活单个组，避免顺带拉起该 appId 的全部组。 */
+  const ensureGroup = useCallback(async (groupId: string): Promise<DataGroupInfo | null> => {
+    const found = dataGroups.find(g => g.id === groupId);
+    if (found?.group && !found.error) return found;
+    if (isAdmin) return found ?? null;
+    await activateGroup(appId, groupId);
+    return getInstance(appId)?.groups.find(g => g.id === groupId) ?? null;
+  }, [dataGroups, isAdmin, activateGroup, appId, getInstance]);
+
+  const rows = useMemo(() => {
+    const map = new Map<string, { id: string; name?: string; info?: DataGroupInfo; declared: number }>();
+    for (const d of descriptors) {
+      map.set(d.id, { id: d.id, name: d.name, declared: d.backends?.length ?? 0 });
+    }
+    for (const g of dataGroups) {
+      const prev = map.get(g.id);
+      map.set(g.id, {
+        id: g.id,
+        name: g.name ?? prev?.name,
+        info: g,
+        declared: g.backends?.length ?? prev?.declared ?? 0,
+      });
+    }
+    return Array.from(map.values()).sort((a, b) => a.id.localeCompare(b.id));
+  }, [descriptors, dataGroups]);
 
   const notify = useCallback((msg: string, isError = false) => {
     setMessage(msg);
@@ -136,7 +193,7 @@ export default function DataGroupsPage() {
     try {
       await repo.createAppDataGroup(id, drafts.map(toDescriptor));
       notify(`Data group "${id}" created`);
-      await refreshDataGroups();
+      await refreshActive();
     } catch (err: any) {
       notify(`Failed to create: ${err?.message ?? err}`, true);
     } finally {
@@ -162,7 +219,7 @@ export default function DataGroupsPage() {
     try {
       await repo.removeAppDataGroup(id);
       notify(`Data group "${id}" removed`);
-      await refreshDataGroups();
+      await refreshActive();
     } catch (err: any) {
       notify(`Failed to remove: ${err?.message ?? err}`, true);
     } finally {
@@ -180,13 +237,14 @@ export default function DataGroupsPage() {
   };
 
   const handleAddBackend = async () => {
-    const info = dataGroups.find(g => g.id === addFor);
-    if (!info?.group || !addDraft) return;
+    if (!addFor || !addDraft) return;
     setBusy(true);
-    const groupId = addFor!;
+    const groupId = addFor;
     setAddFor(null);
     setAddDraft(null);
     try {
+      const info = await ensureGroup(groupId);
+      if (!info?.group) throw new Error(`数据组「${groupId}」尚未激活`);
       await info.group.addBackend(
         addDraft.id,
         addDraft.type,
@@ -194,7 +252,7 @@ export default function DataGroupsPage() {
         addDraft.description || undefined,
       );
       notify(`Backend "${addDraft.id}" added to "${groupId}"`);
-      await refreshDataGroups();
+      await refreshActive();
     } catch (err: any) {
       notify(`Failed to add backend: ${err?.message ?? err}`, true);
     } finally {
@@ -203,13 +261,13 @@ export default function DataGroupsPage() {
   };
 
   const handleRemoveBackend = async (groupId: string, backendId: string) => {
-    const info = dataGroups.find(g => g.id === groupId);
-    if (!info?.group) return;
     setBusy(true);
     try {
+      const info = await ensureGroup(groupId);
+      if (!info?.group) throw new Error(`数据组「${groupId}」尚未激活`);
       await info.group.removeBackend(backendId);
       notify(`Backend "${backendId}" removed from "${groupId}"`);
-      await refreshDataGroups();
+      await refreshActive();
     } catch (err: any) {
       notify(`Failed to remove backend: ${err?.message ?? err}`, true);
     } finally {
@@ -218,10 +276,10 @@ export default function DataGroupsPage() {
   };
 
   const handleFlush = async (groupId: string) => {
-    const info = dataGroups.find(g => g.id === groupId);
-    if (!info?.group) return;
     setBusy(true);
     try {
+      const info = await ensureGroup(groupId);
+      if (!info?.group) throw new Error(`数据组「${groupId}」尚未激活`);
       await info.group.flush();
       notify(`Flushed "${groupId}"`);
     } catch (err: any) {
@@ -231,7 +289,7 @@ export default function DataGroupsPage() {
     }
   };
 
-  if (!repo) return <div className="loading">No repo connected</div>;
+  if (!repo && isAdmin) return <div className="loading">No repo connected</div>;
 
   // ---------------------------------------------------------------------------
   // 后端表单（创建组 / 组内加后端共用）
@@ -317,13 +375,22 @@ export default function DataGroupsPage() {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Data Groups</h1>
-        <button className="btn btn-primary" onClick={openCreate} disabled={busy}>+ New Data Group</button>
+        <div>
+          <h1 className="page-title">Data Groups · {appId}</h1>
+          <p className="form-hint" style={{ marginTop: 2 }}>
+            跟随顶栏选中的 appId（不跟随具体组）；admin 固定使用自身配置组。
+          </p>
+        </div>
+        <button className="btn btn-primary" onClick={openCreate} disabled={busy || !repo}>+ New Data Group</button>
       </div>
 
       {message && <div style={{ marginBottom: 16, color: message.includes('Failed') ? 'var(--danger)' : 'var(--success)', fontSize: 13 }}>{message}</div>}
-      {dataGroupsLoading && <div style={{ marginBottom: 16, color: 'var(--text-muted)', fontSize: 13 }}>Activating data groups...</div>}
-      {dataGroupsError && <div style={{ marginBottom: 16, color: 'var(--danger)', fontSize: 13 }}>{dataGroupsError}</div>}
+      {isAdmin && dataGroupsLoading && <div style={{ marginBottom: 16, color: 'var(--text-muted)', fontSize: 13 }}>Activating data groups...</div>}
+      {(isAdmin ? dataGroupsError : (instanceErrors[appId] ?? (!instance ? `实例「${appId}」尚未打开，请先在顶栏选择该 appId 的组。` : null))) && (
+        <div style={{ marginBottom: 16, color: 'var(--danger)', fontSize: 13 }}>
+          {isAdmin ? dataGroupsError : (instanceErrors[appId] ?? (!instance ? `实例「${appId}」尚未打开，请先在顶栏选择该 appId 的组。` : null))}
+        </div>
+      )}
 
       <div className="table-wrapper">
         <table>
@@ -331,81 +398,90 @@ export default function DataGroupsPage() {
             <tr><th>Group ID</th><th>Backends</th><th>Sync</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            {dataGroups.map(g => {
-              const statuses = g.group ? Array.from(g.group.getSyncStatuses().values()) : [];
+            {rows.map(row => {
+              const g = row.info;
+              const statuses = g?.group ? Array.from(g.group.getSyncStatuses().values()) : [];
               const watching = statuses.filter(s => s.watching).length;
-              const backends = g.backends ?? [];
-              const backendStates = new Map((g.backendStates ?? []).map(s => [s.backendId, s]));
+              const backends = g?.backends ?? [];
+              const backendStates = new Map((g?.backendStates ?? []).map(s => [s.backendId, s]));
               return (
-                <tr key={g.id}>
+                <tr key={row.id}>
                   <td style={{ fontFamily: 'var(--font-mono)' }}>
-                    {g.id}
-                    {g.error && <span className="badge badge-danger" style={{ marginLeft: 6 }}>error</span>}
+                    {row.id}
+                    {row.name && <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--text-muted)' }}>{row.name}</span>}
+                    {g?.error && <span className="badge badge-danger" style={{ marginLeft: 6 }}>error</span>}
+                    {!g && <span className="badge" style={{ marginLeft: 6, background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>未激活</span>}
                   </td>
                   <td>
-                    {backends.length === 0 && <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                    {backends.length === 0 && (
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        {g ? '—' : `未激活 · 声明 ${row.declared} 个后端`}
+                      </span>
+                    )}
                     {backends.map(b => {
                       const bdef = getBackendTypeDef(b.type);
                       return (
                         <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{b.id}</span>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                        {bdef?.icon ?? '?'} {bdef?.label ?? b.type}
-                      </span>
-                      {!backendStates.get(b.id)?.pairId && (
-                        <span
-                          className="badge badge-danger"
-                          title={backendStates.get(b.id)?.error?.message ?? '未建立同步对'}
-                        >
-                          未连接
-                        </span>
-                      )}
-                      <button
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => {
-                          const str = serializeBackend(b);
-                          try {
-                            navigator.clipboard.writeText(str).then(
-                              () => notify(`Copied: ${str}`),
-                              () => notify(`Config: ${str}`),
-                            );
-                          } catch {
-                            notify(`Config: ${str}`);
-                          }
-                        }}
-                        disabled={busy}
-                        title="Copy config string"
-                      >
-                        ⧉
-                      </button>
-                      <button
-                        className="btn btn-sm btn-danger"
-                        onClick={() => handleRemoveBackend(g.id, b.id)}
-                        disabled={busy}
-                        title="Remove backend from group"
-                      >
-                        ✕
-                      </button>
+                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            {bdef?.icon ?? '?'} {bdef?.label ?? b.type}
+                          </span>
+                          {!backendStates.get(b.id)?.pairId && (
+                            <span
+                              className="badge badge-danger"
+                              title={backendStates.get(b.id)?.error?.message ?? '未建立同步对'}
+                            >
+                              未连接
+                            </span>
+                          )}
+                          <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={() => {
+                              const str = serializeBackend(b);
+                              try {
+                                navigator.clipboard.writeText(str).then(
+                                  () => notify(`Copied: ${str}`),
+                                  () => notify(`Config: ${str}`),
+                                );
+                              } catch {
+                                notify(`Config: ${str}`);
+                              }
+                            }}
+                            disabled={busy}
+                            title="Copy config string"
+                          >
+                            ⧉
+                          </button>
+                          <button
+                            className="btn btn-sm btn-danger"
+                            onClick={() => handleRemoveBackend(row.id, b.id)}
+                            disabled={busy}
+                            title="Remove backend from group"
+                          >
+                            ✕
+                          </button>
                         </div>
                       );
                     })}
                   </td>
                   <td style={{ fontSize: 12 }}>
-                    {g.error
-                      ? <span style={{ color: 'var(--danger)' }}>{g.error}</span>
-                      : <>pairs: {statuses.length} · watching: {watching}</>}
+                    {!g
+                      ? <span style={{ color: 'var(--text-muted)' }}>未激活（选择该组后可管理）</span>
+                      : g.error
+                        ? <span style={{ color: 'var(--danger)' }}>{g.error}</span>
+                        : <>pairs: {statuses.length} · watching: {watching}</>}
                   </td>
                   <td>
-                    <button className="btn btn-sm btn-secondary" onClick={() => openAddBackend(g.id)} disabled={busy || !!g.error}>+ Backend</button>
-                    <button className="btn btn-sm btn-secondary" onClick={() => handleFlush(g.id)} disabled={busy || !!g.error} style={{ marginLeft: 4 }}>Flush</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleRemoveGroup(g.id)} disabled={busy} style={{ marginLeft: 4 }}>
-                      {confirmRemove === g.id ? 'Confirm?' : 'Remove'}
+                    <button className="btn btn-sm btn-secondary" onClick={() => openAddBackend(row.id)} disabled={busy || !repo}>+ Backend</button>
+                    <button className="btn btn-sm btn-secondary" onClick={() => handleFlush(row.id)} disabled={busy || !repo} style={{ marginLeft: 4 }}>Flush</button>
+                    <button className="btn btn-sm btn-danger" onClick={() => handleRemoveGroup(row.id)} disabled={busy || !repo} style={{ marginLeft: 4 }}>
+                      {confirmRemove === row.id ? 'Confirm?' : 'Remove'}
                     </button>
                   </td>
                 </tr>
               );
             })}
-            {dataGroups.length === 0 && (
+            {rows.length === 0 && (
               <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
                 No data groups. Create one to sync app data between its backends.
               </td></tr>
@@ -428,7 +504,7 @@ export default function DataGroupsPage() {
                 onChange={e => setNewGroupId(e.target.value)}
                 style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}
               />
-              <p className="form-hint">Stored as <code>.meta/app-data-groups/admin/{'{id}'}.json</code></p>
+              <p className="form-hint">Stored as <code>.meta/app-data-groups/{appId}/{'{id}'}.json</code></p>
             </div>
 
             {drafts.map((d, i) => (

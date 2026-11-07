@@ -1,23 +1,12 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { useConfigRepo } from '../context/ConfigRepoContext';
-import { useRepoInstances } from '../context/RepoInstancesContext';
-import AppInstanceManager from '../components/AppInstanceManager';
-import { DATA_GROUPS_ROOT_PATH, fsPathFor, makeDataGroupPath, parseDataGroupPath } from '../data-group-path';
-import {
-  collectDataGroupOverview,
-  isOverviewPath,
-  makeOverviewAppPath,
-  makeOverviewEntryPath,
-  type DataGroupOverview,
-  type DataGroupOverviewEntry,
-} from '../data-group-overview';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useSyncTarget } from '../context/SyncTargetContext';
+import { fsPathFor, parseDataGroupPath } from '../data-group-path';
+import { targetKindLabel, targetPathPrefix } from '../sync-target';
+import { versionPathFor } from 'zen-fs-config';
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:files');
-
-/** 当前 repo 挂载的 appId 命名空间；只有它的数据组能真正浏览。 */
-const ADMIN_APP_ID = 'admin';
 
 // ---------------------------------------------------------------------------
 // JSON Syntax Highlighter
@@ -63,127 +52,18 @@ function highlightJson(text: string): string {
   return result;
 }
 
-interface TreeNodeAction {
-  label: string;
-  onClick: () => void;
-  tone?: 'primary' | 'secondary' | 'danger';
-  disabled?: boolean;
-  title?: string;
-}
-
 interface TreeNode {
   name: string;
-  /** 树路径：配置仓即真实路径；数据组带 `/@dg/<groupId>` 前缀。 */
+  /** 树路径：配置组为 fs 相对路径；数据组带 `/@dg/<groupId>` 前缀。 */
   path: string;
-  /**
-   * 作用域前缀：该节点所在的命名空间。
-   * 配置仓为 `''`，数据组内为 `/@dg/<groupId>`。
-   * 子节点继承父节点的前缀，于是 `resolveFs(prefix)` 总能得到正确的 fs。
-   */
+  /** 作用域前缀（配置组 `''`，数据组为组路径前缀）。 */
   prefix: string;
   isDir: boolean;
-  loaded: boolean;   // whether children have been loaded
+  loaded: boolean;
   children: TreeNode[];
-  /**
-   * 虚拟节点类型：
-   * · `data-groups`：虚拟容器
-   * · `data-groups-app`：按 appId 分组
-   * · `data-group`：当前 appId 下可浏览的数据组
-   * · `data-group-readonly`：跨 appId 只读条目（不可编辑/删除/浏览）
-   */
-  kind?: 'data-groups' | 'data-groups-app' | 'data-group' | 'data-group-readonly';
-  /** 只读条目：点击不选中、不加载子节点。 */
-  readonly?: boolean;
-  /** 仅用于展开/收起的分组节点：点击不选中。 */
-  selectable?: boolean;
-  /** 行内徽标：组 id / appId / groupType。 */
-  idBadge?: string;
-  appIdBadge?: string;
-  groupType?: string;
-  /** 悬浮说明（只读原因 / 无法解析原因）。 */
-  note?: string;
-  /** 无法解析 / 激活失败时的红色徽标文案。 */
-  problemBadge?: string;
-  /** 行内状态徽标（只读 / 实例已就绪 / 当前实例）。 */
-  statusBadge?: string;
-  statusTone?: 'muted' | 'success' | 'warning';
-  /** 该 appId 已有独立实例，该组可通过「组管理」编辑。 */
-  editable?: boolean;
-  /** 行内操作按钮（点击不触发节点选中 / 展开）。 */
-  actions?: TreeNodeAction[];
 }
 
-/**
- * 总览条目 → 树节点。
- *
- * 只要能拿到组句柄（admin 自管理实例，或该 appId 的独立实例已创建并激活该组），
- * 且描述符有效、类型为 data-sync，就保持可浏览 / 可编辑；
- * 其余（坏 JSON / 非 data-sync / 组未激活 / 未创建实例）均为只读节点。
- */
-function buildOverviewEntryNode(
-  appId: string,
-  entry: DataGroupOverviewEntry,
-  getGroupFs: (appId: string, id: string) => any,
-  managed: boolean,
-): TreeNode {
-  const label = entry.name ?? entry.id;
-  const browseable =
-    entry.parsed &&
-    entry.isDataSync &&
-    !!getGroupFs(appId, entry.id);
-
-  if (browseable) {
-    const groupPath = makeDataGroupPath(appId, entry.id, '/');
-    return {
-      name: label,
-      path: groupPath,
-      prefix: groupPath,
-      isDir: true,
-      loaded: false,
-      children: [],
-      kind: 'data-group',
-      idBadge: entry.id,
-      appIdBadge: appId,
-      groupType: entry.groupType ?? undefined,
-    };
-  }
-
-  const notes: string[] = [];
-  if (entry.problem) notes.push(entry.problem);
-  else if (!entry.isDataSync) notes.push(`非 data-sync（${entry.groupType ?? '未知'}）：仅展示，不当作数据组`);
-  else if (appId !== ADMIN_APP_ID) {
-    notes.push(managed
-      ? '只读：该组未激活（可在「组管理」里查看失败原因）'
-      : '只读：尚未创建独立实例，点击左侧「管理（读写）」后可浏览 / 编辑文件');
-  } else notes.push('只读：该组未激活');
-
-  return {
-    name: label,
-    path: makeOverviewEntryPath(appId, entry.id),
-    prefix: '',
-    isDir: false,
-    loaded: true,
-    children: [],
-    kind: 'data-group-readonly',
-    readonly: true,
-    idBadge: entry.id,
-    appIdBadge: appId,
-    groupType: entry.groupType ?? undefined,
-    note: notes.join('；'),
-    editable: managed && !entry.problem && entry.isDataSync,
-    problemBadge: entry.problem
-      ? (entry.problem.startsWith('激活失败') ? '未激活' : '无法解析')
-      : undefined,
-  };
-}
-
-/**
- * Load children of a directory. Only does one level — no recursion.
- * Uses mode bits to detect directories; no fallback readdir.
- *
- * @param prefix 树路径前缀（数据组为 `/@dag/<groupId>`，配置仓为 `''`），
- *               子节点路径 = prefix + fs 内的真实路径。
- */
+/** 读取一层目录。 */
 async function loadChildren(fs: any, dir: string, prefix = ''): Promise<TreeNode[]> {
   const entries: TreeNode[] = [];
   try {
@@ -198,7 +78,7 @@ async function loadChildren(fs: any, dir: string, prefix = ''): Promise<TreeNode
           path: `${prefix}${fullPath}`,
           prefix,
           isDir,
-          loaded: !isDir,   // files are pre-loaded (no children), dirs need expansion
+          loaded: !isDir,
           children: [],
         });
       } catch {
@@ -214,33 +94,9 @@ async function loadChildren(fs: any, dir: string, prefix = ''): Promise<TreeNode
   });
 }
 
-function FileTree({ rootNodes, resolveFs, selected, onSelect, version }: {
-  rootNodes: TreeNode[];
-  resolveFs: (path: string) => any;
-  selected: string;
-  onSelect: (path: string) => void;
-  /** Bumped after deletes: remounts the tree so expanded dirs reload children. */
-  version: number;
-}) {
-  return (
-    <div className="file-tree">
-      {rootNodes.map(n => (
-        <TreeNodeView
-          key={`${n.path}#${version}`}
-          node={n}
-          resolveFs={resolveFs}
-          selected={selected}
-          onSelect={onSelect}
-          depth={0}
-        />
-      ))}
-    </div>
-  );
-}
-
-function TreeNodeView({ node, resolveFs, selected, onSelect, depth }: {
+function TreeNodeView({ node, fs, selected, onSelect, depth }: {
   node: TreeNode;
-  resolveFs: (path: string) => any;
+  fs: any;
   selected: string;
   onSelect: (path: string) => void;
   depth: number;
@@ -249,25 +105,18 @@ function TreeNodeView({ node, resolveFs, selected, onSelect, depth }: {
   const [loading, setLoading] = useState(false);
   const [children, setChildren] = useState<TreeNode[]>(node.children);
 
-  // 数据组列表是异步到达的，容器节点的 children 会随之变化
   useEffect(() => { setChildren(node.children); }, [node.children]);
 
   const handleClick = async () => {
-    // 跨 appId 只读条目：不可选中、不可进入浏览
-    if (node.readonly) return;
     if (!node.isDir) {
       onSelect(node.path);
       return;
     }
-    // Toggle expand
     if (expanded) {
       setExpanded(false);
       return;
     }
-    // Load children if not yet loaded
     if (!node.loaded) {
-      const fs = resolveFs(node.prefix || node.path);
-      if (!fs) return;
       setLoading(true);
       try {
         const loaded = await loadChildren(fs, fsPathFor(node.path), node.prefix);
@@ -279,7 +128,7 @@ function TreeNodeView({ node, resolveFs, selected, onSelect, depth }: {
       }
     }
     setExpanded(true);
-    if (node.selectable !== false) onSelect(node.path);
+    onSelect(node.path);
   };
 
   return (
@@ -287,80 +136,18 @@ function TreeNodeView({ node, resolveFs, selected, onSelect, depth }: {
       <div
         className={`tree-item ${node.isDir ? 'directory' : ''} ${selected === node.path ? 'active' : ''}`}
         onClick={handleClick}
-        title={node.note}
-        style={{ cursor: node.readonly ? 'default' : 'pointer' }}
+        style={{ cursor: 'pointer' }}
       >
         <span style={{ width: 20, display: 'inline-block', textAlign: 'center' }}>
           {loading ? '⟳' : node.isDir ? (expanded ? '▼' : '▶') : ''}
         </span>
-        <span style={{ marginRight: 4 }}>
-          {node.kind === 'data-groups' || node.kind === 'data-groups-app' || node.kind === 'data-group'
-            ? '🗂️'
-            : node.kind === 'data-group-readonly' ? '🔒'
-              : node.isDir ? '📁' : '📄'}
-        </span>
+        <span style={{ marginRight: 4 }}>{node.isDir ? '📁' : '📄'}</span>
         <span>{node.name}</span>
-        {node.idBadge && (
-          <span className="badge badge-primary" style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px' }}>{node.idBadge}</span>
-        )}
-        {node.appIdBadge && (
-          <span
-            className="badge"
-            style={{ marginLeft: 4, fontSize: 10, padding: '1px 6px', background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}
-          >
-            {node.appIdBadge}
-          </span>
-        )}
-        {node.groupType && (
-          <span
-            className={`badge ${node.groupType === 'data-sync' ? 'badge-success' : 'badge-warning'}`}
-            style={{ marginLeft: 4, fontSize: 10, padding: '1px 6px' }}
-          >
-            {node.groupType}
-          </span>
-        )}
-        {node.problemBadge && (
-          <span className="badge badge-danger" style={{ marginLeft: 4, fontSize: 10, padding: '1px 6px' }}>{node.problemBadge}</span>
-        )}
-        {node.statusBadge && (
-          <span
-            className={`badge ${node.statusTone === 'success' ? 'badge-success' : node.statusTone === 'warning' ? 'badge-warning' : ''}`}
-            style={{
-              marginLeft: 4,
-              fontSize: 10,
-              padding: '1px 6px',
-              ...(node.statusTone === 'muted'
-                ? { background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }
-                : {}),
-            }}
-          >
-            {node.statusBadge}
-          </span>
-        )}
-        {node.editable && (
-          <span className="badge badge-success" style={{ marginLeft: 4, fontSize: 10, padding: '1px 6px' }}>可编辑</span>
-        )}
-        {node.actions?.map(action => (
-          <button
-            key={action.label}
-            className={`btn btn-sm ${action.tone === 'danger' ? 'btn-danger' : action.tone === 'secondary' ? 'btn-secondary' : 'btn-primary'}`}
-            style={{ marginLeft: 6, fontSize: 10, padding: '2px 8px' }}
-            title={action.title}
-            disabled={action.disabled}
-            onClick={e => {
-              // 行内按钮不能触发节点的选中 / 展开
-              e.stopPropagation();
-              action.onClick();
-            }}
-          >
-            {action.label}
-          </button>
-        ))}
       </div>
       {expanded && children.length > 0 && (
         <div className="tree-children">
           {children.map(c => (
-            <TreeNodeView key={c.path} node={c} resolveFs={resolveFs} selected={selected} onSelect={onSelect} depth={depth + 1} />
+            <TreeNodeView key={c.path} node={c} fs={fs} selected={selected} onSelect={onSelect} depth={depth + 1} />
           ))}
         </div>
       )}
@@ -369,262 +156,89 @@ function TreeNodeView({ node, resolveFs, selected, onSelect, depth }: {
 }
 
 export default function FilesPage() {
-  const { repo, dataGroups } = useConfigRepo();
   const {
-    instances: instanceViews,
-    errors: instanceErrors,
-    creating: instanceCreating,
-    revision: instanceRevision,
-    createInstance,
-    releaseInstance,
-  } = useRepoInstances();
+    selected,
+    selectedOption,
+    ready,
+    opening,
+    error,
+    fs,
+    handle,
+    flushTarget,
+    getSyncStatuses,
+  } = useSyncTarget();
   const params = useParams();
   const navigate = useNavigate();
-  const [managerAppId, setManagerAppId] = useState<string | null>(null);
-  const [configNodes, setConfigNodes] = useState<TreeNode[]>([]);
+  const location = useLocation();
+
+  const [rootNodes, setRootNodes] = useState<TreeNode[]>([]);
+  const [treeLoading, setTreeLoading] = useState(false);
   const [treeVersion, setTreeVersion] = useState(0);
-  const [overview, setOverview] = useState<DataGroupOverview>({ apps: [], total: 0 });
-  const [overviewLoading, setOverviewLoading] = useState(true);
-  const [overviewLoaded, setOverviewLoaded] = useState(false);
   const [selectedPath, setSelectedPath] = useState('');
   const [content, setContent] = useState('');
   const [originalContent, setOriginalContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [versionInfo, setVersionInfo] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  /** 当前选中节点是否为目录（决定新建文件 / 目录的落点）。 */
   const [selectedIsDir, setSelectedIsDir] = useState(false);
+  const [flushing, setFlushing] = useState(false);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const search = location.search;
 
-  const instanceByApp = useMemo(
-    () => new Map(instanceViews.map(view => [view.appId, view])),
-    [instanceViews],
-  );
+  const prefix = targetPathPrefix(selected);
+  const urlPath = params['*'] ? `/${params['*']}` : '';
+  const effectivePath = urlPath || selectedPath;
 
-  /**
-   * 所有已激活数据组的句柄与组 fs（含懒创建实例的其它 appId）。
-   * 数据组 fs 由库的 chroot 视图提供，已通过 `hiddenPrefixes` 隐藏
-   * `.meta` / `.config`，因此这里不需要再过滤内部元数据。
-   */
-  const groupScopes = useMemo(() => {
-    const map = new Map<string, { group: any; fs: any }>();
-    const put = (appId: string, info: any) => {
-      const group = info.group;
-      const fs = group?.fs ? (group.fs.promises ?? group.fs) : null;
-      if (group && fs) map.set(`${appId}/${info.id}`, { group, fs });
-    };
-    for (const info of dataGroups) put(ADMIN_APP_ID, info);
-    for (const view of instanceViews) {
-      for (const info of view.groups) put(view.appId, info);
-    }
-    return map;
-  }, [dataGroups, instanceViews]);
+  const scope = parseDataGroupPath(effectivePath);
+  /** 路径必须属于当前选中的组，避免切换过程中的旧路径被误读。 */
+  const scopeMatches = selected.kind === 'data'
+    ? !!scope && scope.appId === selected.appId && scope.groupId === selected.groupId
+    : !scope;
+  const fsPath = scopeMatches
+    ? (selected.kind === 'data' ? scope!.inner : effectivePath)
+    : '';
 
-  const groupScopeFor = useCallback(
-    (appId: string, groupId: string) => groupScopes.get(`${appId}/${groupId}`) ?? null,
-    [groupScopes],
-  );
-
-  const getGroupFs = useCallback(
-    (appId: string, groupId: string) => groupScopeFor(appId, groupId)?.fs ?? null,
-    [groupScopeFor],
-  );
-
-  /** 已创建 → 直接打开组管理面板；未创建 → 懒创建（失败原因由 context 记录并展示）。 */
-  const handleManage = useCallback(async (appId: string) => {
-    try {
-      await createInstance(appId);
-      setManagerAppId(appId);
-    } catch {
-      /* errors[appId] 已记录具体原因 */
-    }
-  }, [createInstance]);
-
-  /** 释放实例：flush → 断开 → 回只读。失败时保留实例并显示原因。 */
-  const handleRelease = useCallback((appId: string) => {
-    void releaseInstance(appId).catch(() => {
-      /* errors[appId] 已记录具体原因 */
-    });
-  }, [releaseInstance]);
-
-  /** 按树路径解析出应该使用的 fs（配置仓 or 任意已激活的数据组）。 */
-  const resolveFs = useCallback((path: string): any => {
-    const parsed = parseDataGroupPath(path);
-    if (parsed) return getGroupFs(parsed.appId, parsed.groupId);
-    return repo?.rootFS?.promises ?? null;
-  }, [repo, getGroupFs]);
-
-  // Load config-repo root level once
+  // 切换 target 后清空当前文件选择。
   useEffect(() => {
-    if (!repo) return;
-    setLoading(true);
-    // 配置仓节点的作用域前缀为空串
-    loadChildren(repo.rootFS.promises, '/', '')
-      .then(nodes => setConfigNodes(nodes))
-      .finally(() => setLoading(false));
-  }, [repo]);
+    setSelectedPath('');
+    setContent('');
+    setOriginalContent('');
+    setVersionInfo(null);
+  }, [selected.kind, selected.appId, selected.groupId]);
 
-  // 跨 appId 数据组总览：直接读仓库根 fs 的 `.config` / `.meta` 描述符
+  // 目标就绪后加载组根目录；treeVersion 用于删除 / 新建后强制刷新。
   useEffect(() => {
-    if (!repo) {
-      setOverview({ apps: [], total: 0 });
-      setOverviewLoading(false);
-      setOverviewLoaded(false);
+    if (!ready || !fs) {
+      setRootNodes([]);
       return;
     }
     let cancelled = false;
-    setOverviewLoading(true);
-    // 已激活的组能拿到权威声明数（`listDeclaredBackends()`）；其余条目由
-    // `collectDataGroupOverview` 回退到描述符里的引导副本，并标注来源。
-    const authoritativeCounts = new Map<string, number>();
-    for (const g of dataGroups) {
-      if (!g.error) authoritativeCounts.set(`${ADMIN_APP_ID}/${g.id}`, g.backends?.length ?? 0);
-    }
-    for (const view of instanceViews) {
-      for (const g of view.groups) {
-        if (!g.error) authoritativeCounts.set(`${view.appId}/${g.id}`, g.backends?.length ?? 0);
-      }
-    }
-    collectDataGroupOverview(repo.rootFS.promises, authoritativeCounts)
-      .then(res => { if (!cancelled) setOverview(res); })
-      .catch((err: any) => {
-        log.warn('[FilesPage] data group overview failed:', err?.message ?? err);
-        if (!cancelled) setOverview({ apps: [], total: 0 });
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setOverviewLoading(false);
-          setOverviewLoaded(true);
-        }
-      });
+    setTreeLoading(true);
+    loadChildren(fs, '/', prefix)
+      .then(nodes => { if (!cancelled) setRootNodes(nodes); })
+      .finally(() => { if (!cancelled) setTreeLoading(false); });
     return () => { cancelled = true; };
-  }, [repo, instanceRevision, dataGroups, instanceViews]);
+  }, [ready, fs, prefix, treeVersion]);
 
-  /**
-   * 把总览条目转成树节点。
-   * 只有当前 appId（admin）且描述符有效、组已激活的数据组可浏览；
-   * 其余一律只读（无对应组 fs，禁止编辑/删除/进入）。
-   */
-  const overviewAppNodes = useMemo<TreeNode[]>(() => {
-    const apps = overview.apps.map(app => ({ ...app }));
-    // 描述符读取失败时回退到 context 中已激活的 admin 组，保持原有可浏览行为
-    if (!apps.some(a => a.appId === ADMIN_APP_ID) && dataGroups.length > 0) {
-      apps.push({
-        appId: ADMIN_APP_ID,
-        entries: dataGroups.map(g => ({
-          appId: ADMIN_APP_ID,
-          id: g.id,
-          descriptorId: g.id,
-          name: null,
-          groupType: g.error ? null : 'data-sync',
-          backendsCount: g.backends?.length ?? 0,
-          backendsSource: 'data-group',
-          source: 'config',
-          parsed: !g.error,
-          isDataSync: !g.error,
-          problem: g.error ? `激活失败：${g.error}` : null,
-        })),
-      });
-    }
-    apps.sort((a, b) => a.appId.localeCompare(b.appId));
-
-    return apps.map(app => {
-      const isAdmin = app.appId === ADMIN_APP_ID;
-      const instance = instanceByApp.get(app.appId);
-      const isCreating = !!instanceCreating[app.appId];
-
-      let statusBadge: string;
-      let statusTone: TreeNode['statusTone'];
-      let actions: TreeNodeAction[] | undefined;
-      let note: string;
-
-      if (isAdmin) {
-        statusBadge = '当前实例';
-        statusTone = 'muted';
-        note = 'admin 自管理实例（启动即建）';
-      } else if (instance) {
-        statusBadge = `独立实例 · ${instance.status.groupCount} 组 · ${instance.status.watchingCount > 0 ? '同步中' : '未在同步'}`;
-        statusTone = 'success';
-        note = '使用独立实例，可释放';
-        actions = [
-          { label: '组管理', tone: 'primary', onClick: () => setManagerAppId(app.appId) },
-          { label: '释放', tone: 'danger', onClick: () => handleRelease(app.appId) },
-        ];
-      } else {
-        statusBadge = isCreating ? '创建中…' : '只读';
-        statusTone = isCreating ? 'warning' : 'muted';
-        note = '只读总览：点击「管理（读写）」懒创建独立实例';
-        actions = [{
-          label: isCreating ? '创建中…' : '管理（读写）',
-          tone: 'primary',
-          disabled: isCreating,
-          onClick: () => { void handleManage(app.appId); },
-        }];
-      }
-
-      return {
-        name: `${app.appId} (${app.entries.length})`,
-        path: makeOverviewAppPath(app.appId),
-        prefix: DATA_GROUPS_ROOT_PATH,
-        isDir: true,
-        loaded: true,
-        kind: 'data-groups-app' as const,
-        selectable: false,
-        statusBadge,
-        statusTone,
-        note,
-        actions,
-        children: app.entries.map(entry => buildOverviewEntryNode(app.appId, entry, getGroupFs, !isAdmin && !!instance)),
-      };
-    });
-  }, [overview, dataGroups, getGroupFs, instanceByApp, instanceCreating, handleManage, handleRelease]);
-
-  // 树根 = 配置仓节点 + 虚拟 “Data Groups” 节点（无数据组时不渲染该容器）
-  const rootNodes = useMemo<TreeNode[]>(() => {
-    if (overviewAppNodes.length === 0) return configNodes;
-    const dataGroupsNode: TreeNode = {
-      name: 'Data Groups',
-      path: DATA_GROUPS_ROOT_PATH,
-      prefix: DATA_GROUPS_ROOT_PATH,
-      isDir: true,
-      loaded: true,
-      kind: 'data-groups',
-      children: overviewAppNodes,
-    };
-    return [...configNodes, dataGroupsNode];
-  }, [configNodes, overviewAppNodes]);
-
-  const effectivePath = (params['*'] ? `/${params['*']}` : selectedPath) || '';
-  /** 只读总览条目的树路径：没有对应 fs，不加载内容。 */
-  const isOverviewEntry = isOverviewPath(effectivePath);
-  const scope = useMemo(() => parseDataGroupPath(effectivePath), [effectivePath]);
-  const fsPath = scope ? scope.inner : effectivePath;
-
+  // 读取当前文件内容。
   useEffect(() => {
-    if (!repo || !effectivePath) return;
-    if (isOverviewPath(effectivePath)) {
-      setContent('');
-      setOriginalContent('');
-      setVersionInfo(null);
-      setSelectedIsDir(false);
-      return;
-    }
-    const fs = resolveFs(effectivePath);
-    if (!fs) {
+    if (!ready || !fs || !effectivePath || !fsPath) {
       setContent('');
       setOriginalContent('');
       setSelectedIsDir(false);
       return;
     }
+    let cancelled = false;
     fs.stat(fsPath).then(async (s: any) => {
       const isDir = s.mode !== undefined && (s.mode & 0o40000) === 0o40000;
+      if (cancelled) return null;
       setSelectedIsDir(isDir);
       if (!isDir) {
         return fs.readFile(fsPath, 'utf-8');
       }
       return null;
     }).then((text: string | null) => {
+      if (cancelled) return;
       const decoded = text != null
         ? (typeof text === 'string' ? text : new TextDecoder().decode(text as Uint8Array))
         : null;
@@ -637,68 +251,53 @@ export default function FilesPage() {
         setOriginalContent('');
       }
     }).catch((err: any) => {
+      if (cancelled) return;
       log.warn('[FilesPage] load file error:', err.message);
       setSelectedIsDir(false);
       setContent('');
       setOriginalContent('');
     });
 
-    // 数据组没有配置仓的 `.version` sidecar 体系 —— 跳过版本信息
-    if (scope) {
+    if (selected.kind !== 'config') {
       setVersionInfo(null);
-      return;
+      return () => { cancelled = true; };
     }
-
-    // Load version info
-    import('zen-fs-config').then(({ versionPathFor }) => {
-      const vp = versionPathFor(effectivePath);
-      if (!vp) return;
-      fs.readFile(vp, 'utf-8').then((v: any) => {
+    const vp = versionPathFor(fsPath);
+    if (vp) {
+      const versionPath = vp.startsWith('/') ? vp : `/${vp}`;
+      fs.readFile(versionPath, 'utf-8').then((v: any) => {
+        if (cancelled) return;
         const str = typeof v === 'string' ? v : new TextDecoder().decode(v as Uint8Array);
         setVersionInfo(JSON.parse(str));
-      }).catch(() => setVersionInfo(null));
-    });
-  }, [repo, effectivePath, fsPath, scope, resolveFs]);
+      }).catch(() => { if (!cancelled) setVersionInfo(null); });
+    }
+    return () => { cancelled = true; };
+  }, [ready, fs, effectivePath, fsPath, selected.kind]);
 
   const handleSelect = (path: string) => {
     const relative = path.startsWith('/') ? path.slice(1) : path;
-    navigate(`/files/${relative}`);
+    navigate(`/files/${relative}${search}`);
   };
 
   const isJson = fsPath.endsWith('.json');
-
-  /** 写入 / 删除后主动 flush，确保改动被推送到该组的各个后端。 */
-  const flushGroup = useCallback(async (): Promise<number> => {
-    if (!scope) return 0;
-    const entry = groupScopeFor(scope.appId, scope.groupId);
-    if (!entry?.group?.flush) return 0;
-    const results = await entry.group.flush();
-    return Array.isArray(results) ? results.length : 0;
-  }, [scope, groupScopeFor]);
+  const hasChanges = content !== originalContent;
 
   const handleSave = async () => {
-    if (!repo || !effectivePath) return;
-    const fs = resolveFs(effectivePath);
-    if (!fs) return;
+    if (!ready || !fs || !effectivePath || !fsPath) return;
     setSaving(true);
     setMessage('');
     try {
-      if (scope) {
-        // 数据组：直接写组 fs（没有 setConfig / 版本 sidecar 体系）
+      if (selected.kind === 'data') {
         const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
         await fs.writeFile(fsPath, data);
-        const synced = await flushGroup();
+        const synced = (await flushTarget()).length;
         setMessage(synced ? `Saved（已触发同步：${synced} 个目标）` : 'Saved（已写入本地）');
       } else {
-        const appId = repo.appId;
-        const isInAppDir = effectivePath.startsWith(`/${appId}/`);
-        if (isInAppDir) {
-          let data: unknown = content;
-          if (isJson) data = JSON.parse(content);
-          repo.setConfig(effectivePath.slice(`/${appId}`.length), data);
+        const repoHandle = handle as any;
+        if (isJson) {
+          repoHandle.setConfig(fsPath, JSON.parse(content));
         } else {
-          const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
-          await fs.writeFile(effectivePath, data);
+          await fs.writeFile(fsPath, content);
         }
         setMessage('Saved');
       }
@@ -711,11 +310,8 @@ export default function FilesPage() {
     }
   };
 
-  /** 在数据组里新建文件 / 目录；落点是当前选中的目录，否则是当前文件所在目录。 */
   const handleCreate = async (kind: 'file' | 'dir') => {
-    if (!scope || !effectivePath) return;
-    const fs = resolveFs(effectivePath);
-    if (!fs) return;
+    if (!ready || !fs || !effectivePath || !fsPath) return;
     const name = window.prompt(kind === 'dir' ? '新建目录名' : '新建文件名');
     if (!name) return;
     if (name === '.' || name === '..' || /[\\/]/.test(name)) {
@@ -728,13 +324,28 @@ export default function FilesPage() {
     try {
       if (kind === 'dir') await fs.mkdir(target);
       else await fs.writeFile(target, '');
-      const synced = await flushGroup();
+      const synced = selected.kind === 'data' ? (await flushTarget()).length : 0;
       setTreeVersion(v => v + 1);
-      setMessage(synced ? `Created（已触发同步：${synced} 个目标）` : 'Created（已写入本地）');
-      handleSelect(makeDataGroupPath(scope.appId, scope.groupId, target));
+      setMessage(synced ? `Created（已触发同步：${synced} 个目标）` : 'Created');
+      handleSelect(`${prefix}${target}`);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
     } finally {
+      setTimeout(() => setMessage(''), 3000);
+    }
+  };
+
+  const handleFlush = async () => {
+    if (!ready) return;
+    setFlushing(true);
+    setMessage('');
+    try {
+      const results = await flushTarget();
+      setMessage(results.length ? `Flushed：${results.length} 个目标` : 'Flushed');
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+    } finally {
+      setFlushing(false);
       setTimeout(() => setMessage(''), 3000);
     }
   };
@@ -753,37 +364,33 @@ export default function FilesPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const handleDelete = async () => {
-    if (!repo || !effectivePath || effectivePath === '/') return;
+    if (!ready || !fs || !effectivePath || !fsPath) return;
     if (!confirmDelete) {
       setConfirmDelete(true);
       setTimeout(() => setConfirmDelete(false), 3000);
       return;
     }
-    const fs = resolveFs(effectivePath);
-    if (!fs) return;
     setDeleting(true);
     setMessage('');
     try {
-      if (scope) {
+      if (selected.kind === 'data') {
         // 删除必须走组 fs 的 unlink / rmdir，才能写墓碑并传播到各后端。
         const st = await fs.stat(fsPath);
         const isDir = st.mode !== undefined && (st.mode & 0o40000) === 0o40000;
         if (isDir) await fs.rmdir(fsPath);
         else await fs.unlink(fsPath);
-        const synced = await flushGroup();
+        const synced = (await flushTarget()).length;
         setMessage(synced ? `Deleted（已触发同步：${synced} 个目标）` : 'Deleted（已写入本地）');
       } else {
-        await repo.deleteFile(effectivePath);
+        // ConfigRepo.deleteFile 走 cachedFS（含 /{appId} 前缀），与 chroot 后的 fsPath 不同。
+        await (handle as any).deleteFile(`/${selected.appId}${fsPath}`);
         setMessage('Deleted');
       }
       setContent('');
       setOriginalContent('');
       setSelectedPath('');
-      // TreeNodeView caches children once expanded, so a deleted directory
-      // would otherwise stay visible until a full page reload.
-      if (!scope) setConfigNodes(await loadChildren(repo.rootFS.promises, '/', ''));
       setTreeVersion(v => v + 1);
-      navigate('/files');
+      navigate(`/files${search}`);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
     } finally {
@@ -793,80 +400,115 @@ export default function FilesPage() {
     }
   };
 
-  if (!repo) return <div className="loading">No repo connected</div>;
+  const statuses = useMemo(
+    () => (ready ? getSyncStatuses() : new Map()),
+    [ready, getSyncStatuses],
+  );
 
-  const hasChanges = content !== originalContent;
-
-  return (
-    <>
-    <div className="split-pane">
-      <div className="split-pane-left">
-        {loading && <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 12 }}>Loading files...</div>}
-        {overviewLoading && (
-          <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 12 }}>Loading data groups...</div>
-        )}
-        {Object.entries(instanceErrors).map(([appId, err]) => (
-          <div
-            key={appId}
-            style={{
-              margin: '8px 12px',
-              padding: '6px 8px',
-              borderRadius: 6,
-              background: 'var(--bg-tertiary)',
-              color: 'var(--danger)',
-              fontSize: 11,
-              lineHeight: 1.5,
-              wordBreak: 'break-word',
-            }}
-          >
-            <strong>{appId}</strong>：{err}
+  if (!ready) {
+    return (
+      <div className="split-pane">
+        <div className="split-pane-left">
+          <div style={{ padding: 16 }}>
+            <div className="page-title" style={{ fontSize: 16, marginBottom: 8 }}>
+              {selectedOption?.label ?? selectedKeyLabel(selected)}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+              <div>
+                <span className="badge badge-primary" style={{ marginRight: 6 }}>{targetKindLabel(selected)}</span>
+                appId: <span className="mono">{selected.appId}</span>
+                {selected.groupId && <span> · 组 id: <span className="mono">{selected.groupId}</span></span>}
+              </div>
+              {selectedOption && (
+                <>
+                  {selected.kind === 'config'
+                    ? <div>后端：实例打开后从配置仓读取</div>
+                    : <div>声明后端：{selectedOption.backendsCount}（来源：{selectedOption.backendsSource}）</div>}
+                  <div>{selectedOption.detail}</div>
+                </>
+              )}
+              {opening && (
+                <div style={{ marginTop: 8, color: 'var(--warning)' }}>
+                  正在后台建立实例并首次同步，完成后本页自动可写…
+                </div>
+              )}
+              {error && (
+                <div style={{ marginTop: 8, color: 'var(--danger)' }}>打开失败：{error}</div>
+              )}
+              {!opening && !error && selectedOption?.openState === 'closed' && (
+                <div style={{ marginTop: 8 }}>首次选择将建立实例并同步，请稍候。</div>
+              )}
+            </div>
           </div>
-        ))}
-        {overviewLoaded && !overviewLoading && overviewAppNodes.length === 0 && (
-          <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 12 }}>
-            No data groups found in .config/ or .meta/
-          </div>
-        )}
-        {!loading && rootNodes.length === 0 && (
-          <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 13 }}>No files</div>
-        )}
-        <FileTree
-          rootNodes={rootNodes}
-          resolveFs={resolveFs}
-          selected={selectedPath}
-          onSelect={handleSelect}
-          version={treeVersion}
-        />
-      </div>
-      <div className="split-pane-right">
-        {isOverviewEntry ? (
+        </div>
+        <div className="split-pane-right">
           <div className="empty-state">
             <div className="icon">🔒</div>
-            <p>只读总览条目：不可编辑、删除或进入浏览</p>
+            <p>组尚未打开：只读展示组信息</p>
             <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              组管理（改名 / 后端 / 删除）请在左侧 appId 分组节点点击「管理（读写）」/「组管理」。
+              打开完成后可以浏览 / 编辑文件，并查看同步状态。
             </p>
           </div>
-        ) : effectivePath ? (
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="split-pane">
+      <div className="split-pane-left">
+        <div className="target-strip">
+          <span className={`badge ${selected.kind === 'config' ? 'badge-primary' : 'badge-success'}`}>
+            {targetKindLabel(selected)}
+          </span>
+          <span className="mono" style={{ fontSize: 11 }}>{selected.appId}</span>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>{selectedOption?.label ?? selectedKeyLabel(selected)}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            {statuses.size} 对 · {Array.from(statuses.values()).filter(s => s.watching).length} watching
+          </span>
+          {selected.kind === 'data' && (
+            <button
+              className="btn btn-sm btn-secondary"
+              style={{ marginLeft: 'auto', fontSize: 11 }}
+              onClick={handleFlush}
+              disabled={flushing}
+            >
+              {flushing ? 'Flushing…' : 'Flush'}
+            </button>
+          )}
+        </div>
+        {treeLoading && <div className="tree-hint">Loading files...</div>}
+        {!treeLoading && rootNodes.length === 0 && <div className="tree-hint">No files</div>}
+        {rootNodes.map(n => (
+          <TreeNodeView
+            key={`${n.path}#${treeVersion}`}
+            node={n}
+            fs={fs}
+            selected={selectedPath}
+            onSelect={handleSelect}
+            depth={0}
+          />
+        ))}
+      </div>
+      <div className="split-pane-right">
+        {effectivePath && fsPath ? (
           <div className="editor-container">
             <div className="editor-toolbar">
               <span className="editor-path">{effectivePath}</span>
-              {scope && <span className="badge badge-primary" style={{ marginLeft: 8 }}>data group: {scope.groupId}</span>}
+              <span className="badge badge-primary" style={{ marginLeft: 8 }}>
+                {selected.kind === 'config' ? `config:${selected.appId}` : `data group: ${selected.groupId}`}
+              </span>
               {isJson && (
                 <button className="btn btn-sm btn-secondary" onClick={handleFormat}>Format</button>
               )}
-              {scope && (
-                <>
-                  <button className="btn btn-sm btn-secondary" onClick={() => handleCreate('file')}>New File</button>
-                  <button className="btn btn-sm btn-secondary" onClick={() => handleCreate('dir')}>New Folder</button>
-                </>
-              )}
+              <button className="btn btn-sm btn-secondary" onClick={() => handleCreate('file')}>New File</button>
+              <button className="btn btn-sm btn-secondary" onClick={() => handleCreate('dir')}>New Folder</button>
               {hasChanges && (
                 <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>
                   {saving ? 'Saving...' : 'Save'}
                 </button>
               )}
-              {effectivePath && effectivePath !== '/' && (
+              {effectivePath !== '/' && (
                 <button
                   className="btn btn-sm btn-danger"
                   onClick={handleDelete}
@@ -881,7 +523,11 @@ export default function FilesPage() {
                   v{versionInfo.version} {versionInfo.hash.slice(0, 12)}
                 </span>
               )}
-              {message && <span style={{ color: message.includes('Error') ? 'var(--danger)' : 'var(--success)', fontSize: 12 }}>{message}</span>}
+              {message && (
+                <span style={{ color: message.includes('Error') ? 'var(--danger)' : 'var(--success)', fontSize: 12 }}>
+                  {message}
+                </span>
+              )}
             </div>
             {versionInfo && (
               <div style={{ padding: '6px 12px', fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
@@ -922,13 +568,16 @@ export default function FilesPage() {
           <div className="empty-state">
             <div className="icon">▣</div>
             <p>Select a file to view or edit</p>
+            {message && (
+              <p style={{ fontSize: 12, color: message.includes('Error') ? 'var(--danger)' : 'var(--success)' }}>{message}</p>
+            )}
           </div>
         )}
       </div>
     </div>
-    {managerAppId && (
-      <AppInstanceManager appId={managerAppId} onClose={() => setManagerAppId(null)} />
-    )}
-    </>
   );
+}
+
+function selectedKeyLabel(ref: { kind: string; appId: string; groupId: string | null }): string {
+  return ref.kind === 'config' ? `${ref.appId} 配置组` : `${ref.appId} / ${ref.groupId}`;
 }
