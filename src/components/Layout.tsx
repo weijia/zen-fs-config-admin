@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
+import { useSyncTarget } from '../context/SyncTargetContext';
+import SyncGroupSelector from './SyncGroupSelector';
 import { versionDisplay, buildTimeDisplay } from '../version';
 import '../styles/global.css';
 
@@ -15,9 +17,10 @@ const navItems = [
 
 export default function Layout() {
   const { repo, connected, reconnect, reconnecting } = useConfigRepo();
+  const { ready, opening, error, retry, switchToAdmin, selected, selectedKey, selectedOption, getSyncStatuses } = useSyncTarget();
   const [vConsoleLoaded, setVConsoleLoaded] = useState(false);
 
-  const statuses = repo ? repo.getSyncStatuses() : new Map();
+  const statuses = ready ? getSyncStatuses() : new Map();
   const anyWatching = Array.from(statuses.values()).some(s => s.watching);
 
   const toggleVConsole = async () => {
@@ -38,9 +41,7 @@ export default function Layout() {
       <div className="topbar">
         <div className="topbar-left">
           <span>zen-fs-config-admin</span>
-          {connected && repo && (
-            <span className="badge badge-primary">{repo.appId}</span>
-          )}
+          {connected && <SyncGroupSelector />}
         </div>
         <div className="topbar-right">
           {connected && repo && (
@@ -59,6 +60,21 @@ export default function Layout() {
           )}
         </div>
       </div>
+
+      {error && (
+        <div className="sync-error-bar">
+          <strong>{selectedOption?.label ?? selectedKey}</strong>
+          <span>打开失败：{error}</span>
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <button className="btn btn-sm btn-primary" onClick={retry} disabled={opening}>
+              {opening ? '重试中…' : '重试'}
+            </button>
+            <button className="btn btn-sm btn-secondary" onClick={switchToAdmin}>
+              切回 admin 配置组
+            </button>
+          </span>
+        </div>
+      )}
 
       <div className="sidebar">
         <nav>
@@ -81,13 +97,13 @@ export default function Layout() {
 
       <div className="statusbar">
         <span>
-          <span className={`status-dot ${connected ? (anyWatching ? 'syncing' : 'connected') : 'disconnected'}`} />
-          {' '}{connected ? (anyWatching ? 'Syncing' : 'Connected') : 'Disconnected'}
+          <span className={`status-dot ${connected ? (opening ? 'syncing' : anyWatching ? 'syncing' : 'connected') : 'disconnected'}`} />
+          {' '}{connected ? (opening ? 'Opening…' : anyWatching ? 'Syncing' : 'Connected') : 'Disconnected'}
         </span>
-        {connected && repo && (
+        {connected && (
           <>
             <span>Sync pairs: {statuses.size}</span>
-            <span>App: {repo.appId}</span>
+            <span>App: {selected.appId}</span>
           </>
         )}
         <span style={{ marginLeft: 'auto' }}>{versionDisplay} | {buildTimeDisplay}</span>

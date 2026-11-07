@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigRepoProvider, useConfigRepo } from './context/ConfigRepoContext';
 import { RepoInstancesProvider } from './context/RepoInstancesContext';
+import { SyncTargetProvider } from './context/SyncTargetContext';
 import Layout from './components/Layout';
 import UpdateToast from './components/UpdateToast';
 import DashboardPage from './pages/DashboardPage';
@@ -43,7 +44,9 @@ export default function App() {
     <BrowserRouter>
       <ConfigRepoProvider>
         <RepoInstancesProvider>
-          <AppRoutes />
+          <SyncTargetProvider>
+            <AppRoutes />
+          </SyncTargetProvider>
         </RepoInstancesProvider>
         <UpdateToast />
       </ConfigRepoProvider>
