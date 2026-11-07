@@ -13,6 +13,7 @@
  */
 import type { IConfigRepo } from 'zen-fs-config';
 import {
+  activateDataGroup,
   activateDataGroups,
   disposeDataGroups,
   type DataGroupInfo,
@@ -122,8 +123,11 @@ export class RepoInstanceRegistry {
 
   /**
    * 懒创建（幂等）：已存在直接返回；并发调用只会真正创建一次。
+   *
+   * @param onlyGroupId 只激活该数据组；`null` 不激活任何数据组（打开配置组）；
+   *   缺省时激活该 appId 的全部数据组。
    */
-  async create(appId: string): Promise<RepoInstance> {
+  async create(appId: string, onlyGroupId?: string | null): Promise<RepoInstance> {
     if (appId === 'admin') {
       throw new Error('admin 实例由 ConfigRepoContext 管理，不能通过注册表创建');
     }
@@ -131,17 +135,18 @@ export class RepoInstanceRegistry {
     const existing = this.instances.get(appId);
     if (existing) return existing;
 
+    // 同一 appId 的创建请求合并（不同组的并发请求也只会建一个 repo）。
     const inFlight = this.pending.get(appId);
     if (inFlight) return inFlight;
 
-    const task = this.doCreate(appId).finally(() => {
+    const task = this.doCreate(appId, onlyGroupId).finally(() => {
       this.pending.delete(appId);
     });
     this.pending.set(appId, task);
     return task;
   }
 
-  private async doCreate(appId: string): Promise<RepoInstance> {
+  private async doCreate(appId: string, onlyGroupId?: string | null): Promise<RepoInstance> {
     if (appId === 'admin') throw new Error('admin 实例不由注册表管理');
 
     if (this.instances.size >= this.maxInstances) {
@@ -175,7 +180,7 @@ export class RepoInstanceRegistry {
       // 等待首次同步完成，确保远端该 appId 的描述符已落到本地。
       await repo.flush();
       assertRepoHealthy(repo);
-      const groups = await activateDataGroups(repo);
+      const groups = await activateDataGroups(repo, onlyGroupId);
       const instance: RepoInstance = {
         appId,
         repo,
@@ -218,10 +223,47 @@ export class RepoInstanceRegistry {
     return true;
   }
 
-  /** 重新枚举该实例的组（增删改后调用）。 */
+  /**
+   * 重新读取该实例已激活组的状态与名字（不激活新组）。
+   * 组增删后通过 `listAppDataGroups()` 校正，但不会波及未选中的组。
+   */
   async refresh(appId: string): Promise<void> {
     const instance = this.require(appId);
-    instance.groups = await activateDataGroups(instance.repo);
+    let descriptors: import('zen-fs-config').AppDataGroupDescriptor[] = [];
+    try {
+      descriptors = await instance.repo.listAppDataGroups();
+    } catch {
+      /* 描述符暂时读不到时保留现有快照 */
+    }
+    const ids = new Set(descriptors.map(d => d.id));
+    instance.groups = instance.groups
+      .filter(info => ids.size === 0 || ids.has(info.id))
+      .map(info => {
+        if (!info.group) return { ...info, name: descriptors.find(d => d.id === info.id)?.name ?? info.name };
+        return {
+          ...info,
+          name: descriptors.find(d => d.id === info.id)?.name ?? info.name,
+          backends: info.group.listDeclaredBackends(),
+          backendStates: Array.from(info.group.getBackendSyncStates().values()),
+          error: undefined,
+        };
+      });
+  }
+
+  /**
+   * 在已创建的实例上激活单个数据组（同一 appId 切换组时用）。
+   * 已激活时直接返回现有快照。
+   */
+  async activateGroup(appId: string, groupId: string): Promise<DataGroupInfo> {
+    const instance = this.require(appId);
+    const existing = instance.groups.find(g => g.id === groupId && g.group);
+    if (existing) return existing;
+    const info = await activateDataGroup(instance.repo, groupId);
+    const idx = instance.groups.findIndex(g => g.id === groupId);
+    instance.groups = idx >= 0
+      ? instance.groups.map((g, i) => (i === idx ? info : g))
+      : [...instance.groups, info];
+    return info;
   }
 
   /** 改名。 */
@@ -314,7 +356,7 @@ export class RepoInstanceRegistry {
   private require(appId: string): RepoInstance {
     const instance = this.instances.get(appId);
     if (!instance) {
-      throw new Error(`实例「${appId}」尚未创建，请先在 Files 页点击「管理（读写）」创建。`);
+      throw new Error(`实例「${appId}」尚未打开，请先在顶栏同步组选择器中选择该组。`);
     }
     return instance;
   }

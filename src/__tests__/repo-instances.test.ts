@@ -146,6 +146,43 @@ describe('RepoInstanceRegistry', () => {
     expect(created.filter(r => r.appId === 'app-b')).toHaveLength(1);
   });
 
+  it('创建时只激活选中的组，不拉起该 appId 的全部组', async () => {
+    const descriptors = [
+      { id: 'g1', name: 'Group 1', groupType: 'data-sync', backends: [] },
+      { id: 'g2', name: 'Group 2', groupType: 'data-sync', backends: [] },
+    ];
+    const repo = makeFakeRepo('app-a', { descriptors });
+    const registry = new RepoInstanceRegistry({
+      createRepo: async () => repo as unknown as IConfigRepo,
+      getRemoteBackend: async () => REMOTE_BACKEND,
+    });
+
+    const instance = await registry.create('app-a', 'g2');
+    expect(instance.groups.map(g => g.id)).toEqual(['g2']);
+    expect(repo.getAppDataGroup).toHaveBeenCalledWith('g2');
+    expect(repo.getAppDataGroup).not.toHaveBeenCalledWith('g1');
+  });
+
+  it('同一实例切换组时按需激活单个组', async () => {
+    const descriptors = [
+      { id: 'g1', name: 'Group 1', groupType: 'data-sync', backends: [] },
+      { id: 'g2', name: 'Group 2', groupType: 'data-sync', backends: [] },
+    ];
+    const repo = makeFakeRepo('app-a', { descriptors });
+    const registry = new RepoInstanceRegistry({
+      createRepo: async () => repo as unknown as IConfigRepo,
+      getRemoteBackend: async () => REMOTE_BACKEND,
+    });
+
+    await registry.create('app-a', 'g1');
+    // 同 appId 已打开：切换组时不会再建实例。
+    await registry.create('app-a', 'g2');
+    await registry.activateGroup('app-a', 'g2');
+
+    expect(registry.get('app-a')?.groups.map(g => g.id).sort()).toEqual(['g1', 'g2']);
+    expect(repo.getAppDataGroup).toHaveBeenCalledTimes(2);
+  });
+
   it('并发上限：超出时提示先释放，且不会创建新 repo', async () => {
     const { registry, created } = makeRegistry({ maxInstances: 3 });
     await registry.create('a');
@@ -212,7 +249,7 @@ describe('RepoInstanceRegistry', () => {
 
   it('未创建的实例执行写操作会给出明确错误', async () => {
     const { registry } = makeRegistry();
-    await expect(registry.renameGroup('app-x', 'g1', 'n')).rejects.toThrow(/尚未创建/);
+    await expect(registry.renameGroup('app-x', 'g1', 'n')).rejects.toThrow(/尚未打开/);
   });
 
   it('创建失败：factory 抛错时带上原因且不注册实例', async () => {

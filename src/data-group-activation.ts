@@ -37,44 +37,70 @@ export interface DataGroupInfo {
 }
 
 /**
- * 枚举并激活某个 repo 下当前 appId 的全部数据同步组。
+ * 激活单个数据同步组。
  *
  * `repo.getAppDataGroup(id)` 会实例化 `AppDataGroupImpl` 并触发 `init()`
  * （建本地主副本 → 为每个后端建双向 SyncPair → syncAll → watchAll），
  * 因此调用它即完成「自动同步」。repo 内部按 id 缓存实例，重复调用不会
  * 产生重复 SyncPair。
+ */
+export async function activateDataGroup(
+  repo: IConfigRepo,
+  id: string,
+  descriptor?: import('zen-fs-config').AppDataGroupDescriptor,
+): Promise<DataGroupInfo> {
+  try {
+    const group = await repo.getAppDataGroup(id);
+    const backends = group.listDeclaredBackends();
+    const backendStates = Array.from(group.getBackendSyncStates().values());
+    const connected = backendStates.filter(s => s.pairId && !s.error).length;
+    log.log(`[data-groups] activated "${id}" (${backends.length} declared, ${connected} connected)`);
+    return { id, name: descriptor?.name, group, backends, backendStates };
+  } catch (err: any) {
+    log.error(`[data-groups] failed to activate "${id}":`, err?.message ?? err);
+    return {
+      id,
+      name: descriptor?.name,
+      group: null as unknown as AppDataGroup,
+      backends: descriptor?.backends ?? [],
+      backendStates: [],
+      error: err?.message ?? String(err),
+    };
+  }
+}
+
+/**
+ * 枚举并激活某个 repo 下的数据同步组。
+ *
+ * @param onlyGroupId 只激活这一个组（顶栏选中即打开时用，避免一次拉起该
+ *   appId 的全部组）；`null` 表示不激活任何数据组（打开的是配置组）；
+ *   缺省时激活全部（admin 启动沿用旧行为）。
  *
  * 单个组失败只记录错误，不影响其它组，也不影响配置仓连接。
  */
-export async function activateDataGroups(repo: IConfigRepo): Promise<DataGroupInfo[]> {
+export async function activateDataGroups(
+  repo: IConfigRepo,
+  onlyGroupId?: string | null,
+): Promise<DataGroupInfo[]> {
+  if (onlyGroupId === null) return [];
+
   let descriptors: import('zen-fs-config').AppDataGroupDescriptor[];
   try {
     descriptors = await repo.listAppDataGroups();
   } catch (err: any) {
     log.warn('[data-groups] listAppDataGroups failed:', err?.message ?? err);
+    if (onlyGroupId) return [await activateDataGroup(repo, onlyGroupId)];
     return [];
+  }
+
+  if (onlyGroupId) {
+    const desc = descriptors.find(d => d.id === onlyGroupId);
+    return [await activateDataGroup(repo, onlyGroupId, desc)];
   }
 
   const infos: DataGroupInfo[] = [];
   for (const desc of descriptors) {
-    try {
-      const group = await repo.getAppDataGroup(desc.id);
-      const backends = group.listDeclaredBackends();
-      const backendStates = Array.from(group.getBackendSyncStates().values());
-      const connected = backendStates.filter(s => s.pairId && !s.error).length;
-      infos.push({ id: desc.id, name: desc.name, group, backends, backendStates });
-      log.log(`[data-groups] activated "${desc.id}" (${backends.length} declared, ${connected} connected)`);
-    } catch (err: any) {
-      log.error(`[data-groups] failed to activate "${desc.id}":`, err?.message ?? err);
-      infos.push({
-        id: desc.id,
-        name: desc.name,
-        group: null as unknown as AppDataGroup,
-        backends: desc.backends ?? [],
-        backendStates: [],
-        error: err?.message ?? String(err),
-      });
-    }
+    infos.push(await activateDataGroup(repo, desc.id, desc));
   }
   return infos;
 }

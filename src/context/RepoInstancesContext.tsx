@@ -62,7 +62,11 @@ interface RepoInstancesContextValue {
   /** 并发上限（用于 UI 提示）。 */
   maxInstances: number;
   /** 懒创建实例；失败时抛出并记录到 errors。 */
-  createInstance: (appId: string) => Promise<RepoInstance>;
+  createInstance: (appId: string, onlyGroupId?: string | null) => Promise<RepoInstance>;
+  /** 在已创建的实例上激活单个组。 */
+  activateGroup: (appId: string, groupId: string) => Promise<void>;
+  /** 重新读取实例已激活组的状态（不激活新组）。 */
+  refreshInstance: (appId: string) => Promise<void>;
   /** 释放实例：flush → dispose → 移除。 */
   releaseInstance: (appId: string) => Promise<void>;
   /** 取实例（未创建时 undefined）。 */
@@ -98,6 +102,8 @@ const Context = createContext<RepoInstancesContextValue>({
   revision: 0,
   maxInstances: DEFAULT_MAX_INSTANCES,
   createInstance: async () => { throw new Error('RepoInstancesProvider not mounted'); },
+  activateGroup: async () => {},
+  refreshInstance: async () => {},
   releaseInstance: async () => {},
   getInstance: () => undefined,
   getStatus: () => null,
@@ -162,11 +168,11 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
     setErrors(prev => ({ ...prev, [appId]: message }));
   }, []);
 
-  const createInstance = useCallback(async (appId: string) => {
+  const createInstance = useCallback(async (appId: string, onlyGroupId?: string | null) => {
     setCreating(prev => ({ ...prev, [appId]: true }));
     clearError(appId);
     try {
-      const instance = await registry.create(appId);
+      const instance = await registry.create(appId, onlyGroupId);
       return instance;
     } catch (err) {
       recordError(appId, errorMessage(err));
@@ -238,6 +244,12 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
   const removeGroup = useCallback((appId: string, groupId: string) =>
     runGroupOp(appId, () => registry.removeGroup(appId, groupId)), [registry, runGroupOp]);
 
+  const activateGroup = useCallback((appId: string, groupId: string) =>
+    runGroupOp(appId, async () => { await registry.activateGroup(appId, groupId); }), [registry, runGroupOp]);
+
+  const refreshInstance = useCallback((appId: string) =>
+    runGroupOp(appId, () => registry.refresh(appId)), [registry, runGroupOp]);
+
   const flushInstance = useCallback((appId: string) =>
     runGroupOp(appId, () => registry.flush(appId)), [registry, runGroupOp]);
 
@@ -267,6 +279,8 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
       revision,
       maxInstances: DEFAULT_MAX_INSTANCES,
       createInstance,
+      activateGroup,
+      refreshInstance,
       releaseInstance,
       getInstance,
       getStatus,

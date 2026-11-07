@@ -1,0 +1,460 @@
+/**
+ * 全局「同步组 target」上下文。
+ *
+ * 负责：
+ *   · 枚举可选 target（配置组 + 数据组，含尚未打开的组）；
+ *   · 解析当前 target（路径 > `?group=` > localStorage > 默认 admin 配置组）；
+ *   · 选中即后台打开（同一 appId 已打开则直接切换；数据组按单个组激活）；
+ *   · 打开失败时停留在失败项，暴露真实原因供页面展示 / 重试；
+ *   · 给页面提供当前组的 fs、同步状态、flush、冲突等句柄。
+ *
+ * 旧的 `/@dg`、`/@adg` 深链仍然生效：路径里带组时以路径为准。
+ */
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import type {
+  AppDataBackendDescriptor,
+  BackendSyncState,
+  ConflictArchive,
+  SyncGroupHandle,
+  SyncPairStatus,
+  SyncResult,
+} from 'zen-fs-config';
+import { useConfigRepo } from './ConfigRepoContext';
+import { useRepoInstances } from './RepoInstancesContext';
+import { collectDataGroupOverview, type DataGroupOverview } from '../data-group-overview';
+import { parseDataGroupPath } from '../data-group-path';
+import {
+  collectSyncTargets,
+  DEFAULT_SYNC_TARGET,
+  DEFAULT_SYNC_TARGET_KEY,
+  parseTargetKey,
+  targetKey,
+  type SyncTargetInstanceSnapshot,
+  type SyncTargetOption,
+  type SyncTargetRef,
+} from '../sync-target';
+
+const STORAGE_KEY = 'zen-fs-config-admin:selected-group';
+
+function readStoredKey(): string {
+  try {
+    return localStorage.getItem(STORAGE_KEY) || DEFAULT_SYNC_TARGET_KEY;
+  } catch {
+    return DEFAULT_SYNC_TARGET_KEY;
+  }
+}
+
+/** 从 Files 路径解析出 target（无则 null）。 */
+function pathTargetKey(pathname: string): string | null {
+  if (!pathname.startsWith('/files')) return null;
+  const rest = pathname.slice('/files'.length);
+  const scope = parseDataGroupPath(rest);
+  if (!scope?.groupId) return null;
+  return targetKey({ kind: 'data', appId: scope.appId, groupId: scope.groupId });
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+export type ConflictReader = {
+  listConflicts: () => Promise<ConflictArchive[]>;
+  resolveConflict: (conflictId: string, mergedContent: unknown) => Promise<void>;
+  readConflictBackup: (conflictId: string, fileType: 'source' | 'target' | 'resolved') => Promise<string>;
+};
+
+interface SyncTargetContextValue {
+  targets: SyncTargetOption[];
+  /** 分组后的展示用列表。 */
+  configTargets: SyncTargetOption[];
+  dataTargets: SyncTargetOption[];
+  selected: SyncTargetRef;
+  selectedKey: string;
+  selectedOption: SyncTargetOption | null;
+  /** 当前组句柄（配置组 = repo；数据组 = 已激活的组）。未打开时为 null。 */
+  handle: SyncGroupHandle | null;
+  /** 当前组的 fs（组根 chroot）。未打开时为 null。 */
+  fs: any | null;
+  ready: boolean;
+  opening: boolean;
+  /** 打开失败的真实原因（失败条展示）。 */
+  error: string | null;
+  /** 已打开实例（按 appId）。 */
+  openedAppIds: string[];
+  maxInstances: number;
+  selectTarget: (key: string) => void;
+  retry: () => void;
+  switchToAdmin: () => void;
+  flushTarget: () => Promise<SyncResult[]>;
+  getSyncStatuses: () => Map<string, SyncPairStatus>;
+  getBackendSyncStates: () => Map<string, BackendSyncState>;
+  listDeclaredBackends: () => AppDataBackendDescriptor[];
+  conflicts: ConflictReader | null;
+}
+
+const Context = createContext<SyncTargetContextValue>({
+  targets: [],
+  configTargets: [],
+  dataTargets: [],
+  selected: DEFAULT_SYNC_TARGET,
+  selectedKey: DEFAULT_SYNC_TARGET_KEY,
+  selectedOption: null,
+  handle: null,
+  fs: null,
+  ready: false,
+  opening: false,
+  error: null,
+  openedAppIds: [],
+  maxInstances: 3,
+  selectTarget: () => {},
+  retry: () => {},
+  switchToAdmin: () => {},
+  flushTarget: async () => [],
+  getSyncStatuses: () => new Map(),
+  getBackendSyncStates: () => new Map(),
+  listDeclaredBackends: () => [],
+  conflicts: null,
+});
+
+export function SyncTargetProvider({ children }: { children: ReactNode }) {
+  const { repo, dataGroups, refreshDataGroups } = useConfigRepo();
+  const {
+    instances,
+    errors: instanceErrors,
+    creating,
+    revision,
+    maxInstances,
+    createInstance,
+    activateGroup,
+    getInstance,
+  } = useRepoInstances();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  const [selectedKey, setSelectedKey] = useState<string>(() => {
+    const fromPath = pathTargetKey(location.pathname);
+    if (fromPath) return fromPath;
+    const fromQuery = parseTargetKey(searchParams.get('group'));
+    if (fromQuery) return targetKey(fromQuery);
+    return readStoredKey();
+  });
+  const [overview, setOverview] = useState<DataGroupOverview>({ apps: [], total: 0 });
+  const [openingKeys, setOpeningKeys] = useState<Record<string, boolean>>({});
+  const [failedKeys, setFailedKeys] = useState<Record<string, boolean>>({});
+  const [localErrors, setLocalErrors] = useState<Record<string, string>>({});
+  /** 已尝试过打开的 target：失败时停住，只有显式重试 / 重新选择才再试。 */
+  const attemptedRef = useRef<Set<string>>(new Set());
+
+  // 跨 appId 描述符总览（选择器不依赖运行态即可列出未打开的组）。
+  useEffect(() => {
+    if (!repo) {
+      setOverview({ apps: [], total: 0 });
+      return;
+    }
+    let cancelled = false;
+    const authoritativeCounts = new Map<string, number>();
+    for (const g of dataGroups) {
+      if (!g.error) authoritativeCounts.set(`admin/${g.id}`, g.backends?.length ?? 0);
+    }
+    for (const view of instances) {
+      for (const g of view.groups) {
+        if (!g.error) authoritativeCounts.set(`${view.appId}/${g.id}`, g.backends?.length ?? 0);
+      }
+    }
+    collectDataGroupOverview(repo.rootFS.promises, authoritativeCounts)
+      .then(res => { if (!cancelled) setOverview(res); })
+      .catch(() => { if (!cancelled) setOverview({ apps: [], total: 0 }); });
+    return () => { cancelled = true; };
+  }, [repo, dataGroups, instances, revision]);
+
+  // 路径优先：/files/@dg/... 或 /files/@adg/... 直接决定 target。
+  useEffect(() => {
+    const fromPath = pathTargetKey(location.pathname);
+    if (fromPath) setSelectedKey(fromPath);
+  }, [location.pathname]);
+
+  // `?group=` 次之（路径没带组时才生效）。
+  useEffect(() => {
+    if (pathTargetKey(location.pathname)) return;
+    const fromQuery = parseTargetKey(searchParams.get('group'));
+    if (fromQuery) setSelectedKey(targetKey(fromQuery));
+  }, [searchParams, location.pathname]);
+
+  // localStorage 记忆最后一次选择。
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, selectedKey); } catch { /* ignore */ }
+  }, [selectedKey]);
+
+  const instanceSnapshots = useMemo<SyncTargetInstanceSnapshot[]>(() => {
+    const list: SyncTargetInstanceSnapshot[] = [];
+    if (repo) {
+      const statuses = repo.getSyncStatuses();
+      list.push({
+        appId: 'admin',
+        open: true,
+        creating: false,
+        pairCount: statuses.size,
+        watchingCount: Array.from(statuses.values()).filter(s => s.watching).length,
+        groups: dataGroups.map(g => {
+          const groupStatuses = g.group && !g.error ? g.group.getSyncStatuses() : new Map();
+          return {
+            appId: 'admin',
+            groupId: g.id,
+            name: g.name,
+            backendsCount: g.backends?.length ?? 0,
+            pairCount: groupStatuses.size,
+            watchingCount: Array.from(groupStatuses.values()).filter(s => s.watching).length,
+            activated: !!g.group && !g.error,
+            error: g.error,
+          };
+        }),
+      });
+    }
+    for (const view of instances) {
+      list.push({
+        appId: view.appId,
+        open: true,
+        creating: !!creating[view.appId],
+        pairCount: view.status.pairCount,
+        watchingCount: view.status.watchingCount,
+        error: instanceErrors[view.appId],
+        groups: view.groups.map(g => {
+          const groupStatuses = g.group && !g.error ? g.group.getSyncStatuses() : new Map();
+          return {
+            appId: view.appId,
+            groupId: g.id,
+            name: g.name,
+            backendsCount: g.backends?.length ?? 0,
+            pairCount: groupStatuses.size,
+            watchingCount: Array.from(groupStatuses.values()).filter(s => s.watching).length,
+            activated: !!g.group && !g.error,
+            error: g.error,
+          };
+        }),
+      });
+    }
+    for (const [appId, isCreating] of Object.entries(creating)) {
+      if (!isCreating || list.some(s => s.appId === appId)) continue;
+      list.push({
+        appId,
+        open: false,
+        creating: true,
+        pairCount: 0,
+        watchingCount: 0,
+        error: instanceErrors[appId],
+        groups: [],
+      });
+    }
+    for (const [appId, err] of Object.entries(instanceErrors)) {
+      if (list.some(s => s.appId === appId)) continue;
+      list.push({ appId, open: false, creating: false, error: err, pairCount: 0, watchingCount: 0, groups: [] });
+    }
+    return list;
+  }, [repo, dataGroups, instances, creating, instanceErrors]);
+
+  const targets = useMemo(
+    () => collectSyncTargets(overview, instanceSnapshots),
+    [overview, instanceSnapshots],
+  );
+
+  const selected = useMemo<SyncTargetRef>(
+    () => parseTargetKey(selectedKey) ?? DEFAULT_SYNC_TARGET,
+    [selectedKey],
+  );
+
+  const selectedOption = useMemo(
+    () => targets.find(t => t.key === selectedKey) ?? null,
+    [targets, selectedKey],
+  );
+
+  const handle = useMemo<SyncGroupHandle | null>(() => {
+    if (selected.kind === 'config') {
+      // 运行时 ConfigRepo 已实现 SyncGroupHandle 的全部能力（含 listDeclaredBackends）。
+      if (selected.appId === 'admin') return (repo as unknown as SyncGroupHandle | null);
+      return (getInstance(selected.appId)?.repo as unknown as SyncGroupHandle | undefined) ?? null;
+    }
+    if (selected.appId === 'admin') {
+      const info = dataGroups.find(g => g.id === selected.groupId);
+      return info && info.group && !info.error ? info.group : null;
+    }
+    // instances 每次 revision 都会重建，组激活后这里能拿到新快照。
+    const info = instances.find(v => v.appId === selected.appId)?.groups.find(g => g.id === selected.groupId);
+    return info && info.group && !info.error ? info.group : null;
+  }, [selected, repo, dataGroups, instances, getInstance]);
+
+  const fs = useMemo(() => {
+    if (!handle) return null;
+    const raw = handle.fs as any;
+    return raw?.promises ?? raw ?? null;
+  }, [handle]);
+
+  const ready = !!handle;
+  const opening = !!openingKeys[selectedKey]
+    || (selected.appId !== 'admin' && !!creating[selected.appId] && !ready);
+
+  const error = localErrors[selectedKey]
+    ?? (selectedOption?.openState === 'failed' ? selectedOption.error : undefined)
+    ?? (selected.kind === 'config' && !ready ? instanceErrors[selected.appId] : undefined)
+    ?? null;
+
+  const runOpen = useCallback(async (ref: SyncTargetRef) => {
+    const key = targetKey(ref);
+    attemptedRef.current.add(key);
+    setOpeningKeys(prev => ({ ...prev, [key]: true }));
+    setLocalErrors(prev => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    try {
+      if (ref.kind === 'config') {
+        // 打开配置组时不顺带激活该 appId 的数据组（null = 不激活）。
+        if (ref.appId !== 'admin') await createInstance(ref.appId, null);
+        return;
+      }
+      if (!ref.groupId) return;
+      if (ref.appId === 'admin') {
+        // admin 的数据组通常在启动时已激活；描述符后到的组按需补激活。
+        if (!dataGroups.some(g => g.id === ref.groupId && g.group)) await refreshDataGroups();
+        return;
+      }
+      const instance = getInstance(ref.appId);
+      if (!instance) {
+        await createInstance(ref.appId, ref.groupId);
+        const after = getInstance(ref.appId);
+        if (!after?.groups.some(g => g.id === ref.groupId && g.group && !g.error)) {
+          await activateGroup(ref.appId, ref.groupId);
+        }
+      } else {
+        await activateGroup(ref.appId, ref.groupId);
+      }
+    } catch (err) {
+      setFailedKeys(prev => ({ ...prev, [key]: true }));
+      setLocalErrors(prev => ({ ...prev, [key]: errorMessage(err) }));
+    } finally {
+      setOpeningKeys(prev => {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  }, [createInstance, activateGroup, getInstance, dataGroups, refreshDataGroups]);
+
+  // 选中即后台打开；失败后停住，不自动回退 / 不自动重试。
+  useEffect(() => {
+    if (ready || opening) return;
+    if (failedKeys[selectedKey]) return;
+    if (attemptedRef.current.has(selectedKey)) return;
+    attemptedRef.current.add(selectedKey);
+    void runOpen(selected);
+  }, [selectedKey, selected, ready, opening, failedKeys, runOpen]);
+
+  const selectTarget = useCallback((key: string) => {
+    const next = parseTargetKey(key);
+    if (!next) return;
+    attemptedRef.current.delete(key);
+    setSelectedKey(key);
+    setFailedKeys(prev => {
+      if (!(key in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[key];
+      return copy;
+    });
+    // 选择器切换后回到该组根部；其它页面保持当前路由，只更新查询参数。
+    const base = location.pathname.startsWith('/files') ? '/files' : location.pathname;
+    const params = new URLSearchParams(location.search);
+    params.set('group', key);
+    navigate(`${base}?${params.toString()}`, { replace: true });
+  }, [location.pathname, location.search, navigate]);
+
+  const retry = useCallback(() => {
+    attemptedRef.current.delete(selectedKey);
+    setFailedKeys(prev => {
+      if (!(selectedKey in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[selectedKey];
+      return copy;
+    });
+    void runOpen(selected);
+  }, [selectedKey, selected, runOpen]);
+
+  const switchToAdmin = useCallback(() => {
+    selectTarget(DEFAULT_SYNC_TARGET_KEY);
+  }, [selectTarget]);
+
+  const flushTarget = useCallback(async (): Promise<SyncResult[]> => {
+    if (!handle) return [];
+    const results = await handle.flush();
+    return Array.isArray(results) ? results : [];
+  }, [handle]);
+
+  const getSyncStatuses = useCallback(
+    () => (handle ? handle.getSyncStatuses() : new Map<string, SyncPairStatus>()),
+    [handle],
+  );
+  const getBackendSyncStates = useCallback(
+    () => (handle ? handle.getBackendSyncStates() : new Map<string, BackendSyncState>()),
+    [handle],
+  );
+  const listDeclaredBackends = useCallback(
+    () => (handle ? handle.listDeclaredBackends() : []),
+    [handle],
+  );
+
+  const conflicts = useMemo<ConflictReader | null>(() => {
+    if (!handle) return null;
+    return {
+      listConflicts: () => handle.listConflicts(),
+      resolveConflict: (id, merged) => handle.resolveConflict(id, merged),
+      readConflictBackup: (id, type) => handle.readConflictBackup(id, type),
+    };
+  }, [handle]);
+
+  const configTargets = useMemo(() => targets.filter(t => t.ref.kind === 'config'), [targets]);
+  const dataTargets = useMemo(() => targets.filter(t => t.ref.kind === 'data'), [targets]);
+
+  return (
+    <Context.Provider value={{
+      targets,
+      configTargets,
+      dataTargets,
+      selected,
+      selectedKey,
+      selectedOption,
+      handle,
+      fs,
+      ready,
+      opening,
+      error,
+      openedAppIds: instances.map(v => v.appId),
+      maxInstances,
+      selectTarget,
+      retry,
+      switchToAdmin,
+      flushTarget,
+      getSyncStatuses,
+      getBackendSyncStates,
+      listDeclaredBackends,
+      conflicts,
+    }}>
+      {children}
+    </Context.Provider>
+  );
+}
+
+export function useSyncTarget() {
+  return useContext(Context);
+}
