@@ -1,44 +1,54 @@
 /**
  * 「同步组 target」模型。
  *
- * 顶栏选择器、Files / Conflicts / 同步状态的页面跟随都围绕一个 target：
- *   · `config:<appId>`      → 某个 appId 的配置同步组（admin 常驻，其它 appId 需懒创建实例）
- *   · `data:<appId>:<gid>`  → 某个 appId 下的数据同步组（描述符存在即可被选中）
+ * 只有两层，都是组：
+ *   · 配置同步组（唯一）：admin 连接的那个远端配置仓本身，地址 `config`，
+ *     Files 根是 admin 自己的分区 `/{admin}`（写入走 ConfigRepo 的墓碑钩子）；
+ *   · 数据同步组：`data:<appId>:<gid>`，描述符登记在配置仓内、彼此独立，
+ *     可单独打开 / 改文件 / 看同步健康。
  *
- * 枚举来源刻意不依赖运行态：数据组来自 `.config` / `.meta` 描述符总览，
- * 配置组来自 admin 自身 + 描述符里出现的 appId + 已注册实例，因此「尚未打开」
- * 的组也会出现在列表里。
+ * appId 只是配置仓内部的实现细节（同一份仓被多个应用共用、各写自己的分区），
+ * 不是用户可选的组，只在数据组行里作为次要信息展示。
+ *
+ * 兼容：旧地址 `config:<appId>` 一律归一为 `config`（appId 不再参与选择）。
+ * `?ns=` 等旧参数被忽略。
+ *
+ * 枚举来源刻意不依赖运行态：数据组来自 `.config` / `.meta` 描述符总览。
+ * 解析失败的描述符也会入列（标记为不可打开），不再静默跳过。
  *
  * 纯函数，供 context 与测试复用。
  */
-import type { DataGroupOverview } from './data-group-overview';
+import type { DataGroupOverview, DataGroupOverviewEntry } from './data-group-overview';
 
 export type SyncTargetKind = 'config' | 'data';
 
 export interface SyncTargetRef {
   kind: SyncTargetKind;
+  /** 数据组所属的 appId（仅作次要信息）；配置组恒为 `admin`。 */
   appId: string;
   /** 数据组为目标时是组 id；配置组为 null。 */
   groupId: string | null;
 }
 
-/** 默认 target：admin 的配置同步组。 */
+/** 默认 target：唯一的配置同步组。 */
 export const DEFAULT_SYNC_TARGET: SyncTargetRef = { kind: 'config', appId: 'admin', groupId: null };
 export const DEFAULT_SYNC_TARGET_KEY = targetKey(DEFAULT_SYNC_TARGET);
 
 /** 目标地址（写进 `?group=` / localStorage）。 */
 export function targetKey(ref: SyncTargetRef): string {
   return ref.kind === 'config'
-    ? `config:${ref.appId}`
+    ? 'config'
     : `data:${ref.appId}:${ref.groupId ?? ''}`;
 }
 
-/** 解析目标地址；格式非法时返回 null。 */
+/** 解析目标地址；格式非法时返回 null。兼容旧地址 `config:<appId>`。 */
 export function parseTargetKey(key: string | null | undefined): SyncTargetRef | null {
   if (!key) return null;
+  if (key === 'config') return { kind: 'config', appId: 'admin', groupId: null };
   const parts = key.split(':');
-  if (parts[0] === 'config' && parts.length === 2 && parts[1]) {
-    return { kind: 'config', appId: parts[1], groupId: null };
+  if (parts[0] === 'config' && parts.length === 2) {
+    // 旧格式：当年按 appId 拆出来的「配置组」，现在统一归一到唯一的配置组。
+    return { kind: 'config', appId: 'admin', groupId: null };
   }
   if (parts[0] === 'data' && parts.length === 3 && parts[1] && parts[2]) {
     return { kind: 'data', appId: parts[1], groupId: parts[2] };
@@ -70,13 +80,15 @@ export interface SyncTargetInstanceSnapshot {
   open: boolean;
   creating: boolean;
   error?: string;
+  /** 配置本身声明的后端数量。 */
+  backendsCount: number;
   /** 配置组自身的同步对数量。 */
   pairCount: number;
   watchingCount: number;
   groups: SyncTargetGroupSnapshot[];
 }
 
-export type TargetOpenState = 'open' | 'opening' | 'closed' | 'failed';
+export type TargetOpenState = 'open' | 'opening' | 'closed' | 'failed' | 'invalid';
 export type TargetSyncHealth = 'ok' | 'syncing' | 'error' | 'unknown';
 
 export interface SyncTargetOption {
@@ -85,12 +97,12 @@ export interface SyncTargetOption {
   label: string;
   openState: TargetOpenState;
   health: TargetSyncHealth;
-  /** 行内状态说明（「已打开 · 2 对」/「首次选择将建立实例并同步」）。 */
+  /** 行内状态说明（「已打开 · 2 个后端 · 2 对」/「首次选择将建立实例并同步」）。 */
   detail: string;
-  /** 描述符声明的后端数（未打开时的只读信息）。 */
+  /** 声明的后端数量（未打开时也能显示）。 */
   backendsCount: number;
   backendsSource: 'data-group' | 'bootstrap' | 'config';
-  /** 打开失败的真实原因。 */
+  /** 打开失败 / 描述符解析失败的真实原因。 */
   error?: string;
 }
 
@@ -102,29 +114,33 @@ function healthOf(open: boolean, watching: number, error: string | undefined): T
   return watching > 0 ? 'syncing' : 'ok';
 }
 
-function configOption(
-  appId: string,
-  snapshot: SyncTargetInstanceSnapshot | undefined,
-  fallback: { backendsCount: number; error?: string } | undefined,
-): SyncTargetOption {
+function openStateOf(
+  open: boolean,
+  creating: boolean,
+  error: string | undefined,
+): TargetOpenState {
+  return open ? 'open' : creating ? 'opening' : error ? 'failed' : 'closed';
+}
+
+/** 唯一的配置同步组（admin 连接的那个远端）。 */
+function configOption(snapshot: SyncTargetInstanceSnapshot | undefined): SyncTargetOption {
   const open = !!snapshot?.open;
   const creating = !!snapshot?.creating;
-  const error = snapshot?.error ?? fallback?.error;
-  const openState: TargetOpenState = open
-    ? 'open'
-    : creating ? 'opening' : error ? 'failed' : 'closed';
+  const error = snapshot?.error;
+  const openState = openStateOf(open, creating, error);
+  const backendsCount = snapshot?.backendsCount ?? 0;
   const detail = open
-    ? `已打开 · ${snapshot?.pairCount ?? 0} 对${snapshot?.watchingCount ? ' · 同步中' : ''}`
+    ? `已打开 · ${backendsCount} 个后端 · ${snapshot?.pairCount ?? 0} 对${snapshot?.watchingCount ? ' · 同步中' : ''}`
     : creating ? '正在打开…（首次同步可能需要几十秒）' : error ? `打开失败：${error}` : OPEN_HINT;
 
   return {
-    ref: { kind: 'config', appId, groupId: null },
-    key: targetKey({ kind: 'config', appId, groupId: null }),
-    label: `${appId} 配置组`,
+    ref: { kind: 'config', appId: 'admin', groupId: null },
+    key: DEFAULT_SYNC_TARGET_KEY,
+    label: '配置同步组',
     openState,
     health: healthOf(open, snapshot?.watchingCount ?? 0, error),
     detail,
-    backendsCount: fallback?.backendsCount ?? 0,
+    backendsCount,
     backendsSource: 'config',
     error,
   };
@@ -132,21 +148,28 @@ function configOption(
 
 function dataOption(
   ref: SyncTargetRef,
-  descriptor: DataGroupOverview['apps'][number]['entries'][number] | null,
+  descriptor: DataGroupOverviewEntry | null,
   snapshot: SyncTargetGroupSnapshot | undefined,
   instance: SyncTargetInstanceSnapshot | undefined,
 ): SyncTargetOption {
-  const error = snapshot?.error ?? instance?.error;
+  const invalid = !!descriptor && !descriptor.parsed && !!descriptor.problem;
+  const error = invalid ? (descriptor.problem ?? '描述符解析失败') : (snapshot?.error ?? instance?.error);
   const open = !!snapshot?.activated;
   const creating = !!instance?.creating;
-  const openState: TargetOpenState = open
-    ? 'open'
-    : creating ? 'opening' : error ? 'failed' : 'closed';
+  const openState: TargetOpenState = invalid
+    ? 'invalid'
+    : openStateOf(open, creating, error);
   const label = snapshot?.name ?? descriptor?.name ?? ref.groupId ?? '';
   const backendsCount = snapshot?.backendsCount ?? descriptor?.backendsCount ?? 0;
-  const detail = open
-    ? `已打开 · ${snapshot?.pairCount ?? 0} 对${snapshot?.watchingCount ? ' · 同步中' : ''}`
-    : creating ? '正在打开…（首次同步可能需要几十秒）' : error ? `打开失败：${error}` : OPEN_HINT;
+  const detail = invalid
+    ? `描述符解析失败：${descriptor.problem}`
+    : open
+      ? `已打开 · ${backendsCount} 个后端 · ${snapshot?.pairCount ?? 0} 对${snapshot?.watchingCount ? ' · 同步中' : ''}`
+      : creating
+        ? '正在打开…（首次同步可能需要几十秒）'
+        : error
+          ? `打开失败：${error}`
+          : `${backendsCount} 个后端 · ${OPEN_HINT}`;
 
   return {
     ref,
@@ -161,8 +184,14 @@ function dataOption(
   };
 }
 
+/** 描述符是否应进入数据组列表（解析失败的也保留，标记不可打开）。 */
+function isListableDescriptor(entry: DataGroupOverviewEntry): boolean {
+  if (!entry.parsed) return !!entry.problem;
+  return entry.isDataSync;
+}
+
 /**
- * 汇总可选 target。
+ * 汇总可选 target：唯一配置组 + 平铺的数据组（含解析失败的描述符）。
  *
  * @param overview 跨 appId 数据组描述符总览（只读，来源为 .config/.meta）。
  * @param instances 每个 appId 的运行态快照（admin 也在内）。
@@ -172,29 +201,19 @@ export function collectSyncTargets(
   instances: SyncTargetInstanceSnapshot[],
 ): SyncTargetOption[] {
   const byApp = new Map(instances.map(s => [s.appId, s]));
-  const configs: SyncTargetOption[] = [];
-
-  const appIds = new Set<string>(['admin', ...overview.apps.map(a => a.appId), ...instances.map(i => i.appId)]);
-  for (const appId of appIds) {
-    configs.push(configOption(appId, byApp.get(appId), undefined));
-  }
-  configs.sort((a, b) => {
-    if (a.ref.appId === 'admin') return -1;
-    if (b.ref.appId === 'admin') return 1;
-    return a.ref.appId.localeCompare(b.ref.appId);
-  });
+  const configs: SyncTargetOption[] = [configOption(byApp.get('admin'))];
 
   const dataByKey = new Map<string, SyncTargetOption>();
-  const descriptors = new Map<string, DataGroupOverview['apps'][number]['entries'][number]>();
+  const descriptors = new Map<string, DataGroupOverviewEntry>();
   for (const app of overview.apps) {
     for (const entry of app.entries) {
-      if (!entry.parsed || !entry.isDataSync) continue;
+      if (!isListableDescriptor(entry)) continue;
       descriptors.set(`${app.appId}/${entry.id}`, entry);
     }
   }
   for (const app of overview.apps) {
     for (const entry of app.entries) {
-      if (!entry.parsed || !entry.isDataSync) continue;
+      if (!isListableDescriptor(entry)) continue;
       const ref: SyncTargetRef = { kind: 'data', appId: app.appId, groupId: entry.id };
       const key = targetKey(ref);
       const instance = byApp.get(app.appId);
