@@ -1,14 +1,44 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
-import type { BackendDescriptor } from 'zen-fs-config';
+import { useSyncTarget } from '../context/SyncTargetContext';
+import type { BackendDescriptor, BackendSyncState } from 'zen-fs-config';
 import { getBackendTypeDef, getBackendTypes } from '../backend-types';
 import { serializeBackend, deserializeBackend } from '../backend-config-string';
+import {
+  backendConnectionText,
+  collectDeclaredBackends,
+  describeBackendConnection,
+  describeBackendScope,
+  scopeCapabilities,
+  type DeclaredBackendRow,
+} from '../backend-scope';
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:backends');
 
+function ConnectionBadge({ row }: { row: Pick<DeclaredBackendRow, 'connection' | 'errorMessage'> }) {
+  const color = row.connection === 'connected'
+    ? 'var(--success)'
+    : row.connection === 'failed'
+      ? 'var(--danger)'
+      : 'var(--text-muted)';
+  return (
+    <span title={row.errorMessage} style={{ fontSize: 12, color }}>
+      {backendConnectionText(row)}
+    </span>
+  );
+}
+
 export default function BackendsPage() {
   const { repo, reconnect, primaryBackendId } = useConfigRepo();
+  const {
+    selected,
+    selectedOption,
+    handle: targetHandle,
+    ready: targetReady,
+    opening: targetOpening,
+    error: targetError,
+  } = useSyncTarget();
   const [backends, setBackends] = useState<BackendDescriptor[]>([]);
   const [editing, setEditing] = useState<BackendDescriptor | null>(null);
   const [isNew, setIsNew] = useState(false);
@@ -177,60 +207,146 @@ export default function BackendsPage() {
   if (!repo) return <div className="loading">No repo connected</div>;
 
   const def = getBackendTypeDef(formState.type);
+  const scope = describeBackendScope(selected);
+  const caps = scopeCapabilities(selected.kind);
+  const isDataScope = selected.kind === 'data';
+  const scopedRows = isDataScope ? collectDeclaredBackends(targetHandle) : [];
+  const configStates: Map<string, BackendSyncState> = repo.getBackendSyncStates();
 
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Backends</h1>
-        <button className="btn btn-primary" onClick={handleNew}>+ Add Backend</button>
+        <div>
+          <h1 className="page-title">Backends</h1>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+            当前同步组：<strong>{selectedOption?.label ?? scope.title}</strong>
+            {isDataScope && <span className="badge" style={{ marginLeft: 6 }}>只读</span>}
+          </div>
+        </div>
       </div>
       {message && <div style={{ marginBottom: 16, color: 'var(--success)', fontSize: 13 }}>{message}</div>}
-      <div className="table-wrapper">
-        <table>
-          <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody>
-            {backends.map(b => {
-              const bdef = getBackendTypeDef(b.type);
-              const isPrimary = b.id === primaryBackendId;
-              const isEnabled = isPrimary || (b as any).enabled !== false;
-              return (
-                <tr key={b.id} style={{ opacity: isEnabled ? 1 : 0.5 }}>
-                  <td style={{ fontFamily: 'var(--font-mono)' }}>
-                    {b.id} {isPrimary && <span className="badge badge-primary" style={{ marginLeft: 4 }}>primary</span>}
-                  </td>
-                  <td><span style={{ marginRight: 6 }}>{bdef?.icon ?? '?'}</span>{bdef?.label ?? b.type}</td>
-                  <td style={{ color: 'var(--text-secondary)' }}>{b.description || '-'}</td>
-                  <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }} title={serializeBackend(b)}>
-                    {serializeBackend(b)}
-                  </td>
-                  <td>
-                    {isPrimary ? (
-                      <span style={{ fontSize: 12, color: 'var(--success)' }}>always on</span>
-                    ) : (
-                      <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-                        <input
-                          type="checkbox"
-                          checked={isEnabled}
-                          onChange={() => handleToggleEnabled(b)}
-                        />
-                        {isEnabled ? 'enabled' : 'disabled'}
-                      </label>
-                    )}
-                  </td>
-                  <td>
-                    <button className="btn btn-sm btn-secondary" onClick={() => handleCopy(b)} title="Copy config">📋</button>
-                    <button className="btn btn-sm btn-secondary" onClick={() => handleEdit(b)} style={{ marginLeft: 4 }}>Edit</button>
-                    {!isPrimary && (
-                      <button className="btn btn-sm btn-danger" onClick={() => handleRemove(b.id)} style={{ marginLeft: 4 }}>Remove</button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-            {backends.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No backends configured</td></tr>}
-          </tbody>
-        </table>
-      </div>
+
+      {isDataScope && (
+        <section style={{ marginBottom: 32 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>{scope.title}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{scope.subtitle}</div>
+            </div>
+            <span className="badge">只读</span>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
+            {scope.sourceNote}
+          </div>
+          {!targetReady ? (
+            <div style={{ fontSize: 13, color: targetError ? 'var(--danger)' : 'var(--text-muted)', padding: '12px 0' }}>
+              {targetOpening
+                ? '正在打开当前数据组…'
+                : targetError
+                  ? `打开失败：${targetError}`
+                  : '当前数据组尚未打开'}
+            </div>
+          ) : scopedRows.length === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '12px 0' }}>
+              该组没有声明的后端
+            </div>
+          ) : (
+            <div className="table-wrapper">
+              <table>
+                <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>连接状态</th></tr></thead>
+                <tbody>
+                  {scopedRows.map(b => {
+                    const bdef = getBackendTypeDef(b.type);
+                    return (
+                      <tr key={b.id}>
+                        <td style={{ fontFamily: 'var(--font-mono)' }}>{b.id}</td>
+                        <td><span style={{ marginRight: 6 }}>{bdef?.icon ?? '?'}</span>{bdef?.label ?? b.type}</td>
+                        <td style={{ color: 'var(--text-secondary)' }}>{b.description || '-'}</td>
+                        <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }} title={serializeBackend(b)}>
+                          {serializeBackend(b)}
+                        </td>
+                        <td><ConnectionBadge row={b} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      <section>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>
+              {isDataScope ? '配置同步组（admin）后端（仓库级）' : '配置同步组（admin）后端'}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {isDataScope ? '与上方数据组无关，仅影响 admin 配置仓' : scope.subtitle}
+            </div>
+          </div>
+          {caps.canAdd && <button className="btn btn-primary" onClick={handleNew}>+ Add Backend</button>}
+        </div>
+        {!isDataScope && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
+            {scope.sourceNote}
+          </div>
+        )}
+        <div className="table-wrapper">
+          <table>
+            <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>Status</th><th>连接状态</th><th>Actions</th></tr></thead>
+            <tbody>
+              {backends.map(b => {
+                const bdef = getBackendTypeDef(b.type);
+                const isPrimary = b.id === primaryBackendId;
+                const isEnabled = isPrimary || (b as any).enabled !== false;
+                return (
+                  <tr key={b.id} style={{ opacity: isEnabled ? 1 : 0.5 }}>
+                    <td style={{ fontFamily: 'var(--font-mono)' }}>
+                      {b.id} {isPrimary && <span className="badge badge-primary" style={{ marginLeft: 4 }}>primary</span>}
+                    </td>
+                    <td><span style={{ marginRight: 6 }}>{bdef?.icon ?? '?'}</span>{bdef?.label ?? b.type}</td>
+                    <td style={{ color: 'var(--text-secondary)' }}>{b.description || '-'}</td>
+                    <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }} title={serializeBackend(b)}>
+                      {serializeBackend(b)}
+                    </td>
+                    <td>
+                      {isPrimary ? (
+                        <span style={{ fontSize: 12, color: 'var(--success)' }}>always on</span>
+                      ) : (
+                        <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                          <input
+                            type="checkbox"
+                            checked={isEnabled}
+                            onChange={() => handleToggleEnabled(b)}
+                          />
+                          {isEnabled ? 'enabled' : 'disabled'}
+                        </label>
+                      )}
+                    </td>
+                    <td>
+                      {isPrimary ? (
+                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>本地主存储</span>
+                      ) : (
+                        <ConnectionBadge row={describeBackendConnection(configStates.get(b.id))} />
+                      )}
+                    </td>
+                    <td>
+                      <button className="btn btn-sm btn-secondary" onClick={() => handleCopy(b)} title="Copy config">📋</button>
+                      <button className="btn btn-sm btn-secondary" onClick={() => handleEdit(b)} style={{ marginLeft: 4 }}>Edit</button>
+                      {!isPrimary && (
+                        <button className="btn btn-sm btn-danger" onClick={() => handleRemove(b.id)} style={{ marginLeft: 4 }}>Remove</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {backends.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No backends configured</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
       {(editing !== null || isNew) && (
         <div className="modal-overlay" onClick={() => { setEditing(null); setIsNew(false); }}>
           <div className="modal" onClick={e => e.stopPropagation()}>
