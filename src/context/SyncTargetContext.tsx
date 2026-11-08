@@ -39,6 +39,7 @@ import { useConfigRepo } from './ConfigRepoContext';
 import { useRepoInstances } from './RepoInstancesContext';
 import { collectDataGroupOverview, type DataGroupOverview } from '../data-group-overview';
 import { parseDataGroupPath } from '../data-group-path';
+import { deleteDataGroupDescriptor } from '../descriptor-cleanup';
 import {
   collectSyncTargets,
   DEFAULT_SYNC_TARGET,
@@ -129,6 +130,11 @@ interface SyncTargetContextValue {
   selectTarget: (key: string) => void;
   retry: () => void;
   switchToAdmin: () => void;
+  /**
+   * 删除数据组登记（两份描述符副本），写墓碑并 flush 到远端。
+   * 用于描述符解析失败、无法打开的组；不动组内用户数据。
+   */
+  deleteDescriptor: (appId: string, groupId: string) => Promise<void>;
   flushTarget: () => Promise<SyncResult[]>;
   getSyncStatuses: () => Map<string, SyncPairStatus>;
   getBackendSyncStates: () => Map<string, BackendSyncState>;
@@ -153,6 +159,7 @@ const Context = createContext<SyncTargetContextValue>({
   selectTarget: () => {},
   retry: () => {},
   switchToAdmin: () => {},
+  deleteDescriptor: async () => {},
   flushTarget: async () => [],
   getSyncStatuses: () => new Map(),
   getBackendSyncStates: () => new Map(),
@@ -436,6 +443,19 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
     selectTarget(DEFAULT_SYNC_TARGET_KEY);
   }, [selectTarget]);
 
+  /**
+   * 删除数据组登记：走 ConfigRepo 的正式删除路径（写墓碑），再 flush 把墓碑
+   * 同步到远端，最后刷新总览（选择器里随之消失）。
+   */
+  const deleteDescriptor = useCallback(async (appId: string, groupId: string) => {
+    if (!repo) throw new Error('配置仓尚未连接，无法删除描述符');
+    await deleteDataGroupDescriptor(repo, appId, groupId);
+    await repo.flush();
+    await refreshDataGroups();
+    const key = targetKey({ kind: 'data', appId, groupId });
+    if (key === selectedKey) selectTarget(DEFAULT_SYNC_TARGET_KEY);
+  }, [repo, refreshDataGroups, selectedKey, selectTarget]);
+
   const flushTarget = useCallback(async (): Promise<SyncResult[]> => {
     if (!handle) return [];
     const results = await handle.flush();
@@ -485,6 +505,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
       selectTarget,
       retry,
       switchToAdmin,
+      deleteDescriptor,
       flushTarget,
       getSyncStatuses,
       getBackendSyncStates,

@@ -35,10 +35,29 @@ export default function SyncGroupSelector() {
     maxInstances,
     selectTarget,
     ready,
+    deleteDescriptor,
   } = useSyncTarget();
   const [open, setOpen] = useState(false);
   const [managerAppId, setManagerAppId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  /** 待确认删除的无效描述符（`data:<appId>:<groupId>`）。 */
+  const [pendingDelete, setPendingDelete] = useState<{ appId: string; groupId: string; label: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteDescriptor(pendingDelete.appId, pendingDelete.groupId);
+      setPendingDelete(null);
+    } catch (err: any) {
+      setDeleteError(err?.message ?? String(err));
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -114,6 +133,25 @@ export default function SyncGroupSelector() {
         <span className="sync-target-detail">
           {isOpening ? '正在打开…（首次同步可能需要几十秒）' : option.detail}
         </span>
+        {invalid && (
+          <button
+            className="btn btn-sm btn-danger"
+            style={{ fontSize: 11, padding: '2px 8px', flex: '0 0 auto' }}
+            onClick={e => {
+              e.stopPropagation();
+              setDeleteError(null);
+              setOpen(false);
+              setPendingDelete({
+                appId: option.ref.appId,
+                groupId: option.ref.groupId ?? option.label,
+                label: option.label,
+              });
+            }}
+            title="删除这条损坏的组登记（不删除组内数据文件）"
+          >
+            删除
+          </button>
+        )}
       </div>
     );
   };
@@ -174,6 +212,55 @@ export default function SyncGroupSelector() {
 
       {managerAppId && (
         <AppInstanceManager appId={managerAppId} onClose={() => setManagerAppId(null)} />
+      )}
+
+      {pendingDelete && (
+        <div
+          className="modal-overlay"
+          onClick={() => { if (!deleting) setPendingDelete(null); }}
+        >
+          <div className="modal" style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-title">删除无效数据组描述符</div>
+
+            <p style={{ fontSize: 13, marginBottom: 8 }}>
+              将删除组登记：
+              <span className="badge" style={{ fontSize: 10, margin: '0 6px', background: 'var(--bg-tertiary)', color: 'var(--success)' }}>
+                data-sync
+              </span>
+              <strong>{pendingDelete.label}</strong>
+              <span style={{ color: 'var(--text-muted)' }}> · appId: {pendingDelete.appId}</span>
+            </p>
+
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+              <p style={{ marginBottom: 6 }}>会清理配置仓里的两份描述符副本：</p>
+              <ul style={{ margin: '0 0 8px 18px', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                <li>.config/app-data-groups/{pendingDelete.appId}/{pendingDelete.groupId}.json</li>
+                <li>.meta/app-data-groups/{pendingDelete.appId}/{pendingDelete.groupId}.json</li>
+              </ul>
+              <p style={{ marginBottom: 6 }}>
+                只删组登记 / 描述符，<strong>不会删除该数据组内的用户数据文件</strong>；
+                {' '}组内数据（含组自己的远端仓库）保持原样。
+              </p>
+              <p style={{ marginBottom: 6 }}>
+                删除会写入墓碑并立即 flush 同步到远端配置仓，远端这份坏 JSON
+                也会被删除，下一轮同步不会把它拉回来。
+              </p>
+            </div>
+
+            {deleteError && (
+              <p style={{ color: 'var(--danger)', fontSize: 12, marginTop: 8 }}>{deleteError}</p>
+            )}
+
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setPendingDelete(null)} disabled={deleting}>
+                取消
+              </button>
+              <button className="btn btn-danger" onClick={handleConfirmDelete} disabled={deleting}>
+                {deleting ? '删除中…' : '删除描述符'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
