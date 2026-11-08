@@ -21,6 +21,37 @@ interface FakeRepo {
   getBackendSyncStates: () => Map<string, any>;
 }
 
+/** 假组句柄：dispose 后 add/remove/flush 会像真实库一样抛错。 */
+function makeFakeGroup(groupId: string, backends: any[], calls: string[]) {
+  const group: any = {
+    id: groupId,
+    disposed: false,
+    listBackends: () => backends,
+    listDeclaredBackends: () => backends,
+    getBackendSyncStates: () => new Map(backends.map(b => [b.id, { backendId: b.id, pairId: `pair-${b.id}` }])),
+    addBackend: vi.fn(async (id: string, type: string, opts: Record<string, unknown>) => {
+      if (group.disposed) throw new Error('DataSyncGroup has been disposed');
+      calls.push(`group:${groupId}:addBackend:${id}:${type}:${JSON.stringify(opts)}`);
+      backends.push({ id, type, options: opts });
+    }),
+    removeBackend: vi.fn(async (id: string) => {
+      if (group.disposed) throw new Error('DataSyncGroup has been disposed');
+      calls.push(`group:${groupId}:removeBackend:${id}`);
+      const idx = backends.findIndex(b => b.id === id);
+      if (idx >= 0) backends.splice(idx, 1);
+    }),
+    flush: vi.fn(async () => {
+      if (group.disposed) throw new Error('DataSyncGroup has been disposed');
+      calls.push(`group:${groupId}:flush`);
+    }),
+    dispose: vi.fn(async () => {
+      group.disposed = true;
+      calls.push(`group:${groupId}:dispose`);
+    }),
+  };
+  return group;
+}
+
 function makeFakeRepo(
   appId: string,
   options: {
@@ -50,23 +81,7 @@ function makeFakeRepo(
 
   const groups = new Map<string, any>();
   for (const desc of descriptors) {
-    const backends = [...(desc.backends ?? [])];
-    groups.set(desc.id, {
-      id: desc.id,
-      listBackends: () => backends,
-      listDeclaredBackends: () => backends,
-      getBackendSyncStates: () => new Map(backends.map(b => [b.id, { backendId: b.id, pairId: `pair-${b.id}` }])),
-      addBackend: vi.fn(async (id: string, type: string, opts: Record<string, unknown>) => {
-        calls.push(`group:${desc.id}:addBackend:${id}:${type}:${JSON.stringify(opts)}`);
-        backends.push({ id, type, options: opts });
-      }),
-      removeBackend: vi.fn(async (id: string) => {
-        calls.push(`group:${desc.id}:removeBackend:${id}`);
-        const idx = backends.findIndex(b => b.id === id);
-        if (idx >= 0) backends.splice(idx, 1);
-      }),
-      dispose: vi.fn(async () => { calls.push(`group:${desc.id}:dispose`); }),
-    });
+    groups.set(desc.id, makeFakeGroup(desc.id, [...(desc.backends ?? [])], calls));
   }
 
   const repo: FakeRepo = {
@@ -90,8 +105,25 @@ function makeFakeRepo(
     updateAppDataGroupName: vi.fn(async (id: string, name: string) => {
       calls.push(`updateAppDataGroupName:${id}:${name}`);
     }),
-    replaceAppDataGroupBackend: vi.fn(async (id: string, backendId: string, type: string) => {
+    replaceAppDataGroupBackend: vi.fn(async (
+      id: string,
+      backendId: string,
+      type: string,
+      backendOptions: Record<string, unknown> = {},
+      description?: string,
+    ) => {
       calls.push(`replaceAppDataGroupBackend:${id}:${backendId}:${type}`);
+      const old = groups.get(id);
+      const declared = old ? old.listDeclaredBackends() as any[] : [];
+      // 模拟真实行为：dispose 旧组，返回一个全新的组对象。
+      if (old) await old.dispose();
+      const next = makeFakeGroup(
+        id,
+        declared.map(b => b.id === backendId ? { ...b, type, options: backendOptions, description } : b),
+        calls,
+      );
+      groups.set(id, next);
+      return next;
     }),
     removeAppDataGroup: vi.fn(async (id: string) => {
       calls.push(`removeAppDataGroup:${id}`);
@@ -245,6 +277,38 @@ describe('RepoInstanceRegistry', () => {
     await registry.removeGroup('app-a', 'g1');
     expect(repoA.removeAppDataGroup).toHaveBeenCalledWith('g1');
     expect(repoB.removeAppDataGroup).not.toHaveBeenCalled();
+  });
+
+  it('replaceBackend 后注册表持有新句柄，旧句柄不再被使用', async () => {
+    const { registry, created } = makeRegistry();
+    await registry.create('app-a');
+    const repo = created[0];
+    const before = registry.get('app-a')!.groups.find(g => g.id === 'g1')!;
+    const oldGroup = before.group;
+    expect((oldGroup as any).disposed).toBe(false);
+
+    await registry.replaceBackend('app-a', 'g1', 'b1', 'Gitee', { owner: 'o2' }, 'new opts');
+
+    const after = registry.get('app-a')!.groups.find(g => g.id === 'g1')!;
+    expect(after.group).not.toBe(oldGroup);
+    expect(after.group).toBe(repo.groups.get('g1'));
+    expect((oldGroup as any).disposed).toBe(true);
+
+    const b1 = after.backends.find(b => b.id === 'b1') as any;
+    expect(b1.type).toBe('Gitee');
+    expect(b1.options).toEqual({ owner: 'o2' });
+    expect(b1.description).toBe('new opts');
+
+    await registry.addBackend('app-a', 'g1', 'b2', 'RemoteStorage', { url: 'x' });
+    expect((after.group as any).addBackend).toHaveBeenCalledWith('b2', 'RemoteStorage', { url: 'x' }, undefined);
+    expect((oldGroup as any).addBackend).not.toHaveBeenCalled();
+
+    await registry.removeBackend('app-a', 'g1', 'b2');
+    expect((after.group as any).removeBackend).toHaveBeenCalledWith('b2');
+    expect((oldGroup as any).removeBackend).not.toHaveBeenCalled();
+
+    await (after.group as any).flush();
+    expect((oldGroup as any).flush).not.toHaveBeenCalled();
   });
 
   it('未创建的实例执行写操作会给出明确错误', async () => {

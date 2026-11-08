@@ -283,7 +283,18 @@ export class RepoInstanceRegistry {
     description?: string,
   ): Promise<void> {
     const instance = this.require(appId);
-    await instance.repo.replaceAppDataGroupBackend(groupId, backendId, type, options, description);
+    // replaceAppDataGroupBackend 会 dispose 旧组并返回新组；必须先把快照
+    // 换成新句柄，再 refresh（refresh 只读 instance.groups 里的句柄）。
+    const group = await instance.repo.replaceAppDataGroupBackend(groupId, backendId, type, options, description);
+    instance.groups = instance.groups.map(info => info.id === groupId
+      ? {
+          ...info,
+          group,
+          backends: group.listDeclaredBackends(),
+          backendStates: Array.from(group.getBackendSyncStates().values()),
+          error: undefined,
+        }
+      : info);
     await this.refresh(appId);
   }
 
