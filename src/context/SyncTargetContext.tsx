@@ -338,9 +338,11 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
 
   const fs = useMemo(() => {
     if (!handle) return null;
-    const raw = handle.fs as any;
+    // 配置组按“配置仓根”浏览（能看到 .config / .meta / 各 appId 目录），
+    // 不再用 chroot 到 /${appId} 的应用载荷视图；数据组仍用各自的组根 fs。
+    const raw = selected.kind === 'config' ? (repo as any)?.rootFS : handle.fs;
     return raw?.promises ?? raw ?? null;
-  }, [handle]);
+  }, [handle, selected.kind, repo]);
 
   const ready = !!handle;
   const opening = !!openingKeys[selectedKey]

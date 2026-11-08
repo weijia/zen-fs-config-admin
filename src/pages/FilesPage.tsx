@@ -382,8 +382,9 @@ export default function FilesPage() {
         const synced = (await flushTarget()).length;
         setMessage(synced ? `Deleted（已触发同步：${synced} 个目标）` : 'Deleted（已写入本地）');
       } else {
-        // ConfigRepo.deleteFile 走 cachedFS（含 /{appId} 前缀），与 chroot 后的 fsPath 不同。
-        await (handle as any).deleteFile(`/${selected.appId}${fsPath}`);
+        // 配置组现在浏览的是配置仓根（与 cachedFS 路径一致，无 /${appId} 前缀），
+        // 因此删除直接使用 fsPath；deleteFile 仍走墓碑感知的路径。
+        await (handle as any).deleteFile(fsPath);
         setMessage('Deleted');
       }
       setContent('');
