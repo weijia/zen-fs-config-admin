@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import { useSyncTarget } from '../context/SyncTargetContext';
+import OpenStageList from '../components/OpenStageList';
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:dashboard');
@@ -16,6 +17,7 @@ export default function DashboardPage() {
     getSyncStatuses,
     flushTarget,
     conflicts: reader,
+    openProgress,
   } = useSyncTarget();
   const [conflicts, setConflicts] = useState<any[]>([]);
   const [flushResult, setFlushResult] = useState<any[]>([]);
@@ -57,12 +59,16 @@ export default function DashboardPage() {
     return (
       <div>
         <div className="page-header"><h1 className="page-title">Dashboard</h1></div>
-        <div className="empty-state">
-          <p>{selectedOption?.label ?? `${selected.appId} / ${selected.groupId ?? ''}`} 尚未打开</p>
-          <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            同步状态跟随当前选中的同步组；组打开后这里会显示该组的同步对与结果。
-          </p>
-        </div>
+        {openProgress ? (
+          <OpenStageList progress={openProgress} />
+        ) : (
+          <div className="empty-state">
+            <p>{selectedOption?.label ?? `${selected.appId} / ${selected.groupId ?? ''}`} 尚未打开</p>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              同步状态跟随当前选中的同步组；组打开后这里会显示该组的同步对与结果。
+            </p>
+          </div>
+        )}
       </div>
     );
   }

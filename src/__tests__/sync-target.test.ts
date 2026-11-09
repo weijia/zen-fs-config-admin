@@ -18,6 +18,7 @@ function entry(appId: string, id: string, overrides: Partial<DataGroupOverviewEn
     groupType: 'data-sync',
     backendsCount: 2,
     backendsSource: 'data-group',
+    bootstrapBackends: [],
     source: 'config',
     parsed: true,
     isDataSync: true,

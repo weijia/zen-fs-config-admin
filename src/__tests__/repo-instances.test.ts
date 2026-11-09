@@ -15,6 +15,7 @@ interface FakeRepo {
   listAppDataGroups: ReturnType<typeof vi.fn>;
   getAppDataGroup: ReturnType<typeof vi.fn>;
   updateAppDataGroupName: ReturnType<typeof vi.fn>;
+  updateAppDataGroupDescriptor: ReturnType<typeof vi.fn>;
   replaceAppDataGroupBackend: ReturnType<typeof vi.fn>;
   removeAppDataGroup: ReturnType<typeof vi.fn>;
   getSyncStatuses: () => Map<string, any>;
@@ -60,6 +61,8 @@ function makeFakeRepo(
     backendError?: string;
     flushError?: string;
     watching?: boolean;
+    /** 组内 `.meta/backends/` 的权威声明；缺省时与描述符里的引导副本相同。 */
+    declared?: Record<string, any[]>;
   } = {},
 ): FakeRepo {
   const calls: string[] = [];
@@ -81,7 +84,8 @@ function makeFakeRepo(
 
   const groups = new Map<string, any>();
   for (const desc of descriptors) {
-    groups.set(desc.id, makeFakeGroup(desc.id, [...(desc.backends ?? [])], calls));
+    const declared = options.declared?.[desc.id] ?? desc.backends ?? [];
+    groups.set(desc.id, makeFakeGroup(desc.id, [...declared], calls));
   }
 
   const repo: FakeRepo = {
@@ -104,6 +108,11 @@ function makeFakeRepo(
     }),
     updateAppDataGroupName: vi.fn(async (id: string, name: string) => {
       calls.push(`updateAppDataGroupName:${id}:${name}`);
+    }),
+    updateAppDataGroupDescriptor: vi.fn(async (id: string, list: any[]) => {
+      calls.push(`updateAppDataGroupDescriptor:${id}:${list.map(b => b.id).join('|')}`);
+      const descriptor = repo.descriptors.find(d => d.id === id);
+      if (descriptor) descriptor.backends = list.map(b => ({ ...b }));
     }),
     replaceAppDataGroupBackend: vi.fn(async (
       id: string,
@@ -403,5 +412,98 @@ describe('RepoInstanceRegistry', () => {
   it('admin 不能通过注册表创建', async () => {
     const { registry } = makeRegistry();
     await expect(registry.create('admin')).rejects.toThrow(/admin 实例/);
+  });
+});
+
+describe('数据组配置副本刷新', () => {
+  it('打开时自愈：组内声明非空而副本为空 → 按组内重写副本并 warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const repo = makeFakeRepo('app-a', {
+        descriptors: [{ id: 'g1', name: 'Group 1', groupType: 'data-sync', backends: [] }],
+        declared: {
+          g1: [
+            { id: 'b1', type: 'Gitee', options: {} },
+            { id: 'b2', type: 'RemoteStorage', options: {} },
+          ],
+        },
+      });
+      const registry = new RepoInstanceRegistry({
+        createRepo: async () => repo as unknown as IConfigRepo,
+        getRemoteBackend: async () => OK_LOOKUP,
+      });
+
+      await registry.create('app-a', 'g1');
+
+      expect(repo.updateAppDataGroupDescriptor).toHaveBeenCalledTimes(1);
+      const [id, list] = repo.updateAppDataGroupDescriptor.mock.calls[0];
+      expect(id).toBe('g1');
+      expect(list.map((b: any) => b.id)).toEqual(['b1', 'b2']);
+      expect(repo.descriptors[0].backends.map((b: any) => b.id)).toEqual(['b1', 'b2']);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('配置组副本与组内声明不一致'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('自愈不做并集：副本里多出的旧 id 不会被写回', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const repo = makeFakeRepo('app-a', {
+        descriptors: [{
+          id: 'g1',
+          name: 'Group 1',
+          groupType: 'data-sync',
+          backends: [{ id: 'deleted-old', type: 'Gitee' }],
+        }],
+        declared: { g1: [{ id: 'b1', type: 'Gitee', options: {} }] },
+      });
+      const registry = new RepoInstanceRegistry({
+        createRepo: async () => repo as unknown as IConfigRepo,
+        getRemoteBackend: async () => OK_LOOKUP,
+      });
+
+      await registry.create('app-a', 'g1');
+
+      const ids = repo.updateAppDataGroupDescriptor.mock.calls[0][1].map((b: any) => b.id);
+      expect(ids).toEqual(['b1']);
+      expect(ids).not.toContain('deleted-old');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('组内声明与副本一致时打开不触发重写', async () => {
+    const repo = makeFakeRepo('app-a');
+    const registry = new RepoInstanceRegistry({
+      createRepo: async () => repo as unknown as IConfigRepo,
+      getRemoteBackend: async () => OK_LOOKUP,
+    });
+
+    await registry.create('app-a', 'g1');
+
+    expect(repo.updateAppDataGroupDescriptor).not.toHaveBeenCalled();
+  });
+
+  it('addBackend / removeBackend 之后把最新声明刷新回副本', async () => {
+    const repo = makeFakeRepo('app-a');
+    const registry = new RepoInstanceRegistry({
+      createRepo: async () => repo as unknown as IConfigRepo,
+      getRemoteBackend: async () => OK_LOOKUP,
+    });
+    await registry.create('app-a', 'g1');
+    repo.updateAppDataGroupDescriptor.mockClear();
+
+    await registry.addBackend('app-a', 'g1', 'b2', 'RemoteStorage', { url: 'x' });
+    expect(repo.updateAppDataGroupDescriptor).toHaveBeenCalledTimes(1);
+    expect(repo.updateAppDataGroupDescriptor.mock.calls[0][0]).toBe('g1');
+    expect(repo.updateAppDataGroupDescriptor.mock.calls[0][1].map((b: any) => b.id)).toEqual([
+      'b1',
+      'b2',
+    ]);
+
+    repo.updateAppDataGroupDescriptor.mockClear();
+    await registry.removeBackend('app-a', 'g1', 'b1');
+    expect(repo.updateAppDataGroupDescriptor.mock.calls[0][1].map((b: any) => b.id)).toEqual(['b2']);
   });
 });

@@ -40,6 +40,7 @@ import { useRepoInstances } from './RepoInstancesContext';
 import { collectDataGroupOverview, type DataGroupOverview } from '../data-group-overview';
 import { parseDataGroupPath } from '../data-group-path';
 import { deleteDataGroupDescriptor } from '../descriptor-cleanup';
+import type { OpenProgress, OpenProgressStage } from '../open-progress';
 import {
   collectSyncTargets,
   DEFAULT_SYNC_TARGET,
@@ -113,6 +114,8 @@ interface SyncTargetContextValue {
   /** 分组后的展示用列表。 */
   configTargets: SyncTargetOption[];
   dataTargets: SyncTargetOption[];
+  /** 配置仓里登记的数据组总览（跨 appId，含引导副本里的后端清单）。 */
+  overview: DataGroupOverview;
   selected: SyncTargetRef;
   selectedKey: string;
   selectedOption: SyncTargetOption | null;
@@ -122,6 +125,11 @@ interface SyncTargetContextValue {
   fs: any | null;
   ready: boolean;
   opening: boolean;
+  /**
+   * 打开过程的分阶段进度（仅 `opening` 时有值）。
+   * 阶段与计数都来自真实信号；拿不到计数的阶段只给阶段文案。
+   */
+  openProgress: OpenProgress | null;
   /** 打开失败的真实原因（失败条展示）。 */
   error: string | null;
   /** 已打开实例（按 appId）。 */
@@ -146,6 +154,7 @@ const Context = createContext<SyncTargetContextValue>({
   targets: [],
   configTargets: [],
   dataTargets: [],
+  overview: { apps: [], total: 0 },
   selected: DEFAULT_SYNC_TARGET,
   selectedKey: DEFAULT_SYNC_TARGET_KEY,
   selectedOption: null,
@@ -153,6 +162,7 @@ const Context = createContext<SyncTargetContextValue>({
   fs: null,
   ready: false,
   opening: false,
+  openProgress: null,
   error: null,
   openedAppIds: [],
   maxInstances: 3,
@@ -174,6 +184,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
     errors: instanceErrors,
     creating,
     revision,
+    openProgress: instanceProgress,
     maxInstances,
     createInstance,
     activateGroup,
@@ -188,6 +199,8 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
   );
   const [overview, setOverview] = useState<DataGroupOverview>({ apps: [], total: 0 });
   const [openingKeys, setOpeningKeys] = useState<Record<string, boolean>>({});
+  /** 本次打开的起始时间（供阶段进度展示"已用时"）。 */
+  const [openStartedAt, setOpenStartedAt] = useState<number | null>(null);
   const [failedKeys, setFailedKeys] = useState<Record<string, boolean>>({});
   const [localErrors, setLocalErrors] = useState<Record<string, string>>({});
   /** 已尝试过打开的 target：失败时停住，只有显式重试 / 重新选择才再试。 */
@@ -360,9 +373,26 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
     ?? (selected.kind === 'data' && !ready ? instanceErrors[selected.appId] : undefined)
     ?? null;
 
+  /**
+   * 打开进度：阶段与计数来自注册表 / repo 的真实信号；
+   * 注册表还没上报时退回到「准备打开」/「打开数据组」阶段，不填任何数字。
+   */
+  const openProgress = useMemo<OpenProgress | null>(() => {
+    if (!opening) return null;
+    const fromRegistry: OpenProgressStage | undefined =
+      selected.appId !== 'admin' ? instanceProgress[selected.appId] : undefined;
+    const fallback: OpenProgressStage = selected.kind === 'data'
+      ? { stage: 'activate', detail: selected.groupId ? `组「${selected.groupId}」` : undefined, pairs: [] }
+      : { stage: 'prepare', pairs: [] };
+    const stage = fromRegistry ?? fallback;
+    const now = Date.now();
+    return { ...stage, startedAt: openStartedAt ?? now, updatedAt: now };
+  }, [opening, selected, instanceProgress, openStartedAt]);
+
   const runOpen = useCallback(async (ref: SyncTargetRef, key: string) => {
     attemptedRef.current.add(key);
     setOpeningKeys(prev => ({ ...prev, [key]: true }));
+    setOpenStartedAt(Date.now());
     setLocalErrors(prev => {
       if (!(key in prev)) return prev;
       const next = { ...prev };
@@ -397,6 +427,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
         delete next[key];
         return next;
       });
+      setOpenStartedAt(null);
     }
   }, [createInstance, activateGroup, getInstance, dataGroups, refreshDataGroups]);
 
@@ -503,6 +534,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
       targets,
       configTargets,
       dataTargets,
+      overview,
       selected,
       selectedKey,
       selectedOption,
@@ -510,6 +542,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
       fs,
       ready,
       opening,
+      openProgress,
       error,
       openedAppIds: instances.map(v => v.appId),
       maxInstances,

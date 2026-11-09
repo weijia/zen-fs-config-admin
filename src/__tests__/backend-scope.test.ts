@@ -5,6 +5,7 @@ import {
   collectDeclaredBackends,
   describeBackendConnection,
   describeBackendScope,
+  resolveScopedBackends,
   scopeCapabilities,
 } from '../backend-scope';
 
@@ -107,5 +108,43 @@ describe('backend-scope', () => {
 
   it('当前组句柄缺失时返回空列表而不是报错', () => {
     expect(collectDeclaredBackends(null)).toEqual([]);
+  });
+});
+
+describe('resolveScopedBackends', () => {
+  it('组已激活时只读组内权威声明，配置组副本不参与合并', () => {
+    const h = handle([backend('live-1')], new Map());
+    const view = resolveScopedBackends(h, {
+      bootstrapBackends: [{ id: 'copy-only', type: 'Gitee' }],
+    });
+
+    expect(view.source).toBe('data-group');
+    expect(view.rows.map(r => r.id)).toEqual(['live-1']);
+    expect(view.bootstrap).toEqual([]);
+  });
+
+  it('不做并集：权威里已删除、仅存在于副本的 id 不得出现', () => {
+    const h = handle([backend('b1')], new Map());
+    const view = resolveScopedBackends(h, {
+      bootstrapBackends: [{ id: 'b1', type: 'Gitee' }, { id: 'removed', type: 'Gitee' }],
+    });
+
+    expect(view.rows.map(r => r.id)).toEqual(['b1']);
+    expect(JSON.stringify(view)).not.toContain('removed');
+  });
+
+  it('组未激活且副本有记录时回退为引导视图', () => {
+    const view = resolveScopedBackends(null, {
+      bootstrapBackends: [{ id: 'b1', type: 'Gitee' }],
+    });
+
+    expect(view.source).toBe('bootstrap');
+    expect(view.rows).toEqual([]);
+    expect(view.bootstrap).toEqual([{ id: 'b1', type: 'Gitee' }]);
+  });
+
+  it('组未激活且副本为空时没有可展示来源', () => {
+    expect(resolveScopedBackends(null, { bootstrapBackends: [] }).source).toBe('none');
+    expect(resolveScopedBackends(null, null).source).toBe('none');
   });
 });

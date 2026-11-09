@@ -6,12 +6,13 @@ import { getBackendTypeDef, getBackendTypes } from '../backend-types';
 import { serializeBackend, deserializeBackend } from '../backend-config-string';
 import {
   backendConnectionText,
-  collectDeclaredBackends,
   describeBackendConnection,
   describeBackendScope,
+  resolveScopedBackends,
   scopeCapabilities,
   type DeclaredBackendRow,
 } from '../backend-scope';
+import { targetKey } from '../sync-target';
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:backends');
@@ -35,9 +36,11 @@ export default function BackendsPage() {
     selected,
     selectedOption,
     handle: targetHandle,
-    ready: targetReady,
     opening: targetOpening,
     error: targetError,
+    overview,
+    selectTarget,
+    retry,
   } = useSyncTarget();
   const [backends, setBackends] = useState<BackendDescriptor[]>([]);
   const [editing, setEditing] = useState<BackendDescriptor | null>(null);
@@ -210,8 +213,25 @@ export default function BackendsPage() {
   const scope = describeBackendScope(selected);
   const caps = scopeCapabilities(selected.kind);
   const isDataScope = selected.kind === 'data';
-  const scopedRows = isDataScope ? collectDeclaredBackends(targetHandle) : [];
+  /** 当前数据组在配置仓里的登记项（引导副本的来源）。 */
+  const overviewEntry = isDataScope && selected.groupId
+    ? overview.apps
+      .find(app => app.appId === selected.appId)
+      ?.entries.find(entry => entry.id === selected.groupId) ?? null
+    : null;
+  // 组已激活时只用组内权威声明；未激活时才回退到配置组引导副本（不做并集）。
+  const scoped = resolveScopedBackends(isDataScope ? targetHandle : null, overviewEntry);
   const configStates: Map<string, BackendSyncState> = repo.getBackendSyncStates();
+
+  /** 「切换并打开该组」：失败态重试，否则重新选中触发自动打开。 */
+  const handleOpenGroup = () => {
+    if (!selected.groupId) return;
+    if (targetError) {
+      retry();
+      return;
+    }
+    selectTarget(targetKey(selected));
+  };
 
   return (
     <div>
@@ -238,7 +258,67 @@ export default function BackendsPage() {
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
             {scope.sourceNote}
           </div>
-          {!targetReady ? (
+          {scoped.source === 'data-group' ? (
+            scoped.rows.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '12px 0' }}>
+                该组没有声明的后端
+              </div>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>连接状态</th></tr></thead>
+                  <tbody>
+                    {scoped.rows.map(b => {
+                      const bdef = getBackendTypeDef(b.type);
+                      return (
+                        <tr key={b.id}>
+                          <td style={{ fontFamily: 'var(--font-mono)' }}>{b.id}</td>
+                          <td><span style={{ marginRight: 6 }}>{bdef?.icon ?? '?'}</span>{bdef?.label ?? b.type}</td>
+                          <td style={{ color: 'var(--text-secondary)' }}>{b.description || '-'}</td>
+                          <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }} title={serializeBackend(b)}>
+                            {serializeBackend(b)}
+                          </td>
+                          <td><ConnectionBadge row={b} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
+          ) : scoped.source === 'bootstrap' ? (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '4px 0 10px' }}>
+                <strong>来源：配置组引导副本，尚未激活</strong>
+                {targetOpening ? '（正在打开…）' : targetError ? `（打开失败：${targetError}）` : ''}
+                。组内 .meta/backends/ 就绪后以组内为准，不与副本合并。
+              </div>
+              <div className="table-wrapper">
+                <table>
+                  <thead><tr><th>ID</th><th>Type</th></tr></thead>
+                  <tbody>
+                    {scoped.bootstrap.map(b => {
+                      const bdef = getBackendTypeDef(b.type);
+                      return (
+                        <tr key={b.id}>
+                          <td style={{ fontFamily: 'var(--font-mono)' }}>{b.id}</td>
+                          <td><span style={{ marginRight: 6 }}>{bdef?.icon ?? '?'}</span>{bdef?.label ?? b.type}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <button
+                className="btn btn-sm btn-primary"
+                style={{ marginTop: 8 }}
+                onClick={handleOpenGroup}
+                disabled={targetOpening}
+              >
+                切换并打开该组
+              </button>
+            </div>
+          ) : (
             <div style={{ fontSize: 13, color: targetError ? 'var(--danger)' : 'var(--text-muted)', padding: '12px 0' }}>
               {targetOpening
                 ? '正在打开当前数据组…'
@@ -246,29 +326,59 @@ export default function BackendsPage() {
                   ? `打开失败：${targetError}`
                   : '当前数据组尚未打开'}
             </div>
-          ) : scopedRows.length === 0 ? (
+          )}
+        </section>
+      )}
+
+      {!isDataScope && (
+        <section style={{ marginBottom: 32 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>该 appId 已登记的数据组（来自配置仓）</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                只读；列出配置仓 .config/app-data-groups/ 下所有 appId 的登记项，可跳转到对应数据组
+              </div>
+            </div>
+            <span className="badge">只读</span>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
+            后端数来自描述符里的引导副本；组激活后以组内 .meta/backends/ 为准。
+          </div>
+          {overview.total === 0 ? (
             <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '12px 0' }}>
-              该组没有声明的后端
+              配置仓里还没有登记的数据组
             </div>
           ) : (
             <div className="table-wrapper">
               <table>
-                <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>连接状态</th></tr></thead>
+                <thead><tr><th>appId</th><th>组 id</th><th>后端数</th><th>后端数来源</th><th>Actions</th></tr></thead>
                 <tbody>
-                  {scopedRows.map(b => {
-                    const bdef = getBackendTypeDef(b.type);
+                  {overview.apps.flatMap(app => app.entries.map(entry => {
+                    const jumpable = entry.parsed && entry.isDataSync;
                     return (
-                      <tr key={b.id}>
-                        <td style={{ fontFamily: 'var(--font-mono)' }}>{b.id}</td>
-                        <td><span style={{ marginRight: 6 }}>{bdef?.icon ?? '?'}</span>{bdef?.label ?? b.type}</td>
-                        <td style={{ color: 'var(--text-secondary)' }}>{b.description || '-'}</td>
-                        <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }} title={serializeBackend(b)}>
-                          {serializeBackend(b)}
+                      <tr key={`${app.appId}/${entry.id}`}>
+                        <td style={{ fontFamily: 'var(--font-mono)' }}>{app.appId}</td>
+                        <td style={{ fontFamily: 'var(--font-mono)' }}>
+                          {entry.id}
+                          {entry.name && <span style={{ marginLeft: 6, color: 'var(--text-secondary)' }}>{entry.name}</span>}
+                          {!jumpable && <span className="badge" style={{ marginLeft: 6 }}>不可打开</span>}
                         </td>
-                        <td><ConnectionBadge row={b} /></td>
+                        <td>{entry.backendsCount}</td>
+                        <td style={{ color: 'var(--text-secondary)' }}>
+                          {entry.backendsSource === 'data-group' ? '组内声明（权威）' : '引导副本'}
+                        </td>
+                        <td>
+                          <button
+                            className="btn btn-sm btn-secondary"
+                            disabled={!jumpable}
+                            onClick={() => selectTarget(targetKey({ kind: 'data', appId: app.appId, groupId: entry.id }))}
+                          >
+                            打开
+                          </button>
+                        </td>
                       </tr>
                     );
-                  })}
+                  }))}
                 </tbody>
               </table>
             </div>

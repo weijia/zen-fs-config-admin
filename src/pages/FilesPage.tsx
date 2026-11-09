@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useSyncTarget } from '../context/SyncTargetContext';
+import OpenStageList from '../components/OpenStageList';
 import { fsPathFor, parseDataGroupPath } from '../data-group-path';
 import { targetKindLabel, targetPathPrefix } from '../sync-target';
 import { versionPathFor } from 'zen-fs-config';
@@ -161,6 +162,7 @@ export default function FilesPage() {
     selectedOption,
     ready,
     opening,
+    openProgress,
     error,
     fs,
     handle,
@@ -428,7 +430,12 @@ export default function FilesPage() {
                   <div>{selectedOption.detail}</div>
                 </>
               )}
-              {opening && (
+              {openProgress && (
+                <div style={{ marginTop: 10 }}>
+                  <OpenStageList progress={openProgress} />
+                </div>
+              )}
+              {opening && !openProgress && (
                 <div style={{ marginTop: 8, color: 'var(--warning)' }}>
                   正在后台建立实例并首次同步，完成后本页自动可写…
                 </div>

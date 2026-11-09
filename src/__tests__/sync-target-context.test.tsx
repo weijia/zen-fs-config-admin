@@ -78,6 +78,7 @@ function baseInstances(createInstance: ReturnType<typeof vi.fn>) {
     errors: {},
     creating: {},
     revision: 0,
+    openProgress: {},
     maxInstances: 3,
     createInstance,
     activateGroup: vi.fn(async () => {}),

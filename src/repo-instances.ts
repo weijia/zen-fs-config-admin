@@ -18,6 +18,7 @@ import {
   disposeDataGroups,
   type DataGroupInfo,
 } from './data-group-activation';
+import { summarizeSyncPairs, type OpenProgressUpdate } from './open-progress';
 
 /** 默认允许同时存在的懒创建实例数上限。 */
 export const DEFAULT_MAX_INSTANCES = 3;
@@ -74,6 +75,13 @@ export interface RepoInstanceRegistryOptions {
    * 未就绪返回 `not-ready`（可重试），确实没有远端后端返回 `none`。
    */
   getRemoteBackend: () => Promise<RemoteBackendLookup>;
+  /**
+   * 打开过程的分阶段进度（可选）。
+   *
+   * 只在能拿到真实信号时上报：阶段切换、以及首次同步期间按 repo 的同步对
+   * 状态汇总的计数（库没有逐文件进度）。回调抛错不影响打开流程。
+   */
+  onProgress?: (update: OpenProgressUpdate) => void;
   /** 并发实例上限，默认 3。 */
   maxInstances?: number;
 }
@@ -116,6 +124,15 @@ export class RepoInstanceRegistry {
   constructor(options: RepoInstanceRegistryOptions) {
     this.options = options;
     this.maxInstances = options.maxInstances ?? DEFAULT_MAX_INSTANCES;
+  }
+
+  /** 上报进度；进度回调的错误不能影响打开流程本身。 */
+  private report(update: OpenProgressUpdate): void {
+    try {
+      this.options.onProgress?.(update);
+    } catch {
+      /* ignore progress callback failures */
+    }
   }
 
   /** 已创建实例数。 */
@@ -174,6 +191,12 @@ export class RepoInstanceRegistry {
     }
 
     let lookup: RemoteBackendLookup;
+    this.report({
+      appId,
+      stage: 'prepare',
+      detail: `appId「${appId}」`,
+      pairs: [],
+    });
     try {
       lookup = await this.options.getRemoteBackend();
     } catch (err) {
@@ -192,6 +215,12 @@ export class RepoInstanceRegistry {
     }
     const backend = lookup.backend;
 
+    this.report({
+      appId,
+      stage: 'connect',
+      detail: `后端 ${backend.id}（${backend.type}）`,
+      pairs: [],
+    });
     let repo: IConfigRepo;
     try {
       repo = await this.options.createRepo(appId, backend);
@@ -199,10 +228,28 @@ export class RepoInstanceRegistry {
       throw new Error(`实例创建失败：appId「${appId}」的配置仓无法连接：${messageOf(err)}`);
     }
 
+    let progressTimer: ReturnType<typeof setInterval> | undefined;
     try {
+      // 首次同步：库没有逐文件进度，只能按同步对的 state / lastResult 如实汇总。
+      const readPairs = () => summarizeSyncPairs(repo.getSyncStatuses?.() ?? new Map());
+      this.report({ appId, stage: 'sync', ...readPairs() });
+      progressTimer = setInterval(() => {
+        try {
+          this.report({ appId, stage: 'sync', ...readPairs() });
+        } catch {
+          /* repo 已 dispose 时忽略 */
+        }
+      }, 500);
+
       // 等待首次同步完成，确保远端该 appId 的描述符已落到本地。
       await repo.flush();
       assertRepoHealthy(repo);
+      this.report({
+        appId,
+        stage: 'activate',
+        detail: onlyGroupId ? `组「${onlyGroupId}」` : '数据组',
+        pairs: [],
+      });
       const groups = await activateDataGroups(repo, onlyGroupId);
       const instance: RepoInstance = {
         appId,
@@ -212,6 +259,10 @@ export class RepoInstanceRegistry {
         createdAt: Date.now(),
       };
       this.instances.set(appId, instance);
+      // 自愈：旧版本 / 竞态可能让配置组副本落后于组内声明，以组内为准重写副本。
+      for (const info of groups) {
+        if (info.group && !info.error) await this.syncDescriptorCopy(instance, info.id, true);
+      }
       return instance;
     } catch (err) {
       try {
@@ -220,6 +271,8 @@ export class RepoInstanceRegistry {
         /* best effort */
       }
       throw new Error(`实例创建失败：appId「${appId}」：${messageOf(err)}`);
+    } finally {
+      if (progressTimer) clearInterval(progressTimer);
     }
   }
 
@@ -286,6 +339,7 @@ export class RepoInstanceRegistry {
     instance.groups = idx >= 0
       ? instance.groups.map((g, i) => (i === idx ? info : g))
       : [...instance.groups, info];
+    if (info.group && !info.error) await this.syncDescriptorCopy(instance, groupId, true);
     return info;
   }
 
@@ -319,6 +373,7 @@ export class RepoInstanceRegistry {
         }
       : info);
     await this.refresh(appId);
+    await this.syncDescriptorCopy(instance, groupId);
   }
 
   /** 给组内新增后端（走该实例中该组的 group API）。 */
@@ -333,6 +388,7 @@ export class RepoInstanceRegistry {
     const group = this.requireGroup(appId, groupId);
     await group.addBackend(backendId, type, options, description);
     await this.refresh(appId);
+    await this.syncDescriptorCopy(this.require(appId), groupId);
   }
 
   /** 从组内删除后端。 */
@@ -340,6 +396,7 @@ export class RepoInstanceRegistry {
     const group = this.requireGroup(appId, groupId);
     await group.removeBackend(backendId);
     await this.refresh(appId);
+    await this.syncDescriptorCopy(this.require(appId), groupId);
   }
 
   /** 删除数据组。 */
@@ -385,6 +442,53 @@ export class RepoInstanceRegistry {
       }
     }
     this.instances.clear();
+  }
+
+  /**
+   * 把组内权威后端列表写回配置组副本
+   * （`.config/app-data-groups/{appId}/{id}.json`）。
+   *
+   * · 只取组句柄的 `listDeclaredBackends()`，绝不把副本并入组内；
+   * · 库的写入按字节幂等：内容相同则零写入；
+   * · `heal` 为 true 时先比对后端 id 集合，不一致才重写并打一条 warning，
+   *   用于「组内非空、副本为空/落后」这类历史不一致；
+   * · 刷新失败只记 warning，不影响组内的写操作结果。
+   */
+  private async syncDescriptorCopy(
+    instance: RepoInstance,
+    groupId: string,
+    heal = false,
+  ): Promise<void> {
+    const group = instance.groups.find(g => g.id === groupId)?.group;
+    if (!group) return;
+    // 该 API 在 0.7.2 的 class 上是公开方法，但尚未进入 IConfigRepo 接口；
+    // 用结构化类型探测，老版本缺这个方法时跳过（组内写操作本身仍然成功）。
+    const writer = instance.repo as unknown as {
+      updateAppDataGroupDescriptor?: (
+        id: string,
+        backends: import('zen-fs-config').AppDataBackendDescriptor[],
+      ) => Promise<void>;
+    };
+    if (typeof writer.updateAppDataGroupDescriptor !== 'function') return;
+    try {
+      const authoritative = group.listDeclaredBackends();
+      if (heal) {
+        const descriptor = (await instance.repo.listAppDataGroups()).find(d => d.id === groupId);
+        const copyIds = (descriptor?.backends ?? []).map(b => b.id).sort().join(',');
+        const liveIds = authoritative.map(b => b.id).sort().join(',');
+        if (copyIds === liveIds) return;
+        console.warn(
+          `[repo-instances] 数据组「${groupId}」的配置组副本与组内声明不一致：` +
+          `副本 [${copyIds || '空'}]，组内 [${liveIds || '空'}]，已按组内重写副本。`,
+        );
+      }
+      // meta 省略 → 库保留副本里已有的 name / features。
+      await writer.updateAppDataGroupDescriptor.call(instance.repo, groupId, authoritative);
+    } catch (err) {
+      console.warn(
+        `[repo-instances] 数据组「${groupId}」的配置组副本刷新失败：${messageOf(err)}`,
+      );
+    }
   }
 
   private require(appId: string): RepoInstance {

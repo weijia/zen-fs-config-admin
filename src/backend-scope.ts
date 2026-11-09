@@ -78,6 +78,43 @@ export function collectDeclaredBackends(
   }));
 }
 
+/** 数据组后端列表的来源。 */
+export type ScopedBackendSource = 'data-group' | 'bootstrap' | 'none';
+
+/** 数据组作用域的后端视图。 */
+export interface ScopedBackendView {
+  source: ScopedBackendSource;
+  /** 权威声明行（仅 `source === 'data-group'` 时有值）。 */
+  rows: DeclaredBackendRow[];
+  /** 引导副本里的后端（仅 `source === 'bootstrap'` 时有值）。 */
+  bootstrap: Array<{ id: string; type: string }>;
+}
+
+/**
+ * 决定数据组后端列表的来源。
+ *
+ * 规则（与「权威不变、不做并集」一致）：
+ *   · 组已激活（有句柄）→ 只读组内 `.meta/backends/`，引导副本不参与；
+ *   · 组未激活且副本有记录 → 副本作为引导视图，UI 必须标注「尚未激活」；
+ *   · 其余 → 空。
+ *
+ * 副本里有、权威里没有的后端 id 不会出现在 `rows` 里（反之亦然），
+ * 避免已删除的后端因副本滞后而「复活」。
+ */
+export function resolveScopedBackends(
+  handle: DeclaredBackendHandle | null,
+  entry?: { bootstrapBackends: Array<{ id: string; type: string }> } | null,
+): ScopedBackendView {
+  if (handle) {
+    return { source: 'data-group', rows: collectDeclaredBackends(handle), bootstrap: [] };
+  }
+  const bootstrap = entry?.bootstrapBackends ?? [];
+  if (bootstrap.length > 0) {
+    return { source: 'bootstrap', rows: [], bootstrap: [...bootstrap] };
+  }
+  return { source: 'none', rows: [], bootstrap: [] };
+}
+
 /**
  * 本版的上半栏只读；编辑能力只属于配置同步组（合并进下半栏）。
  * 组件用这份能力表来决定是否渲染写控件。

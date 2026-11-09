@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import { useSyncTarget } from '../context/SyncTargetContext';
+import { OPEN_STAGE_LABELS } from '../open-progress';
 import SyncGroupSelector from './SyncGroupSelector';
 import { versionDisplay, buildTimeDisplay } from '../version';
 import '../styles/global.css';
@@ -17,7 +18,7 @@ const navItems = [
 
 export default function Layout() {
   const { repo, connected, reconnect, reconnecting } = useConfigRepo();
-  const { ready, opening, error, retry, switchToAdmin, selected, selectedKey, selectedOption, getSyncStatuses } = useSyncTarget();
+  const { ready, opening, openProgress, error, retry, switchToAdmin, selected, selectedKey, selectedOption, getSyncStatuses } = useSyncTarget();
   const [vConsoleLoaded, setVConsoleLoaded] = useState(false);
 
   const statuses = ready ? getSyncStatuses() : new Map();
@@ -98,7 +99,7 @@ export default function Layout() {
       <div className="statusbar">
         <span>
           <span className={`status-dot ${connected ? (opening ? 'syncing' : anyWatching ? 'syncing' : 'connected') : 'disconnected'}`} />
-          {' '}{connected ? (opening ? 'Opening…' : anyWatching ? 'Syncing' : 'Connected') : 'Disconnected'}
+          {' '}{connected ? (opening ? (openProgress ? `${OPEN_STAGE_LABELS[openProgress.stage]}…` : 'Opening…') : anyWatching ? 'Syncing' : 'Connected') : 'Disconnected'}
         </span>
         {connected && (
           <>

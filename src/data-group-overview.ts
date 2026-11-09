@@ -43,6 +43,11 @@ export interface DataGroupOverviewEntry {
    *   · `bootstrap`：来自配置组的引导副本 `backends` 字段（描述符可能滞后）。
    */
   backendsSource: 'data-group' | 'bootstrap';
+  /**
+   * 引导副本里声明的后端清单（仅 `backendsSource === 'bootstrap'` 时有意义）。
+   * 组已激活时权威清单请用组句柄的 `listDeclaredBackends()`，不要用这份。
+   */
+  bootstrapBackends: Array<{ id: string; type: string }>;
   /** 命中布局：`config` 优先，`meta` 为 legacy。 */
   source: 'config' | 'meta';
   /** 描述符结构是否完整（JSON 可解析且 id/groupType 齐全）。 */
@@ -105,6 +110,7 @@ async function readDescriptor(
     groupType: null,
     backendsCount: 0,
     backendsSource: 'bootstrap',
+    bootstrapBackends: [],
     source,
     parsed: false,
     isDataSync: false,
@@ -124,16 +130,19 @@ async function readDescriptor(
 
   const descriptorId = typeof parsed.id === 'string' && parsed.id ? parsed.id : null;
   const groupType = typeof parsed.groupType === 'string' && parsed.groupType ? parsed.groupType : null;
+  const bootstrapBackends: Array<{ id: string; type: string }> = Array.isArray(parsed.backends)
+    ? parsed.backends
+      .filter((b: any) => b && typeof b.id === 'string' && b.id)
+      .map((b: any) => ({ id: b.id as string, type: typeof b.type === 'string' ? b.type : 'unknown' }))
+    : [];
   const entry: DataGroupOverviewEntry = {
     ...base,
     descriptorId,
     groupType,
     name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : null,
-    backendsCount:
-      typeof authoritativeCount === 'number'
-        ? authoritativeCount
-        : Array.isArray(parsed.backends) ? parsed.backends.length : 0,
+    backendsCount: typeof authoritativeCount === 'number' ? authoritativeCount : bootstrapBackends.length,
     backendsSource: typeof authoritativeCount === 'number' ? 'data-group' : 'bootstrap',
+    bootstrapBackends,
     parsed: descriptorId !== null && groupType !== null,
     isDataSync: groupType === 'data-sync',
   };

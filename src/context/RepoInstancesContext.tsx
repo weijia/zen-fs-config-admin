@@ -25,6 +25,7 @@ import {
   type RepoInstance,
   type RepoInstanceStatus,
 } from '../repo-instances';
+import type { OpenProgressStage } from '../open-progress';
 
 const NODE_ID_STORAGE_KEY = 'zen-fs-config-admin:node-id';
 const CACHE_TTL_MS = 300000;
@@ -59,6 +60,8 @@ interface RepoInstancesContextValue {
   creating: Record<string, boolean>;
   /** 版本号：实例 / 组发生变化时递增，供文件树刷新总览。 */
   revision: number;
+  /** appId → 当前打开阶段（只含真实可观测的信号，计时由调用方补充）。 */
+  openProgress: Record<string, OpenProgressStage>;
   /** 并发上限（用于 UI 提示）。 */
   maxInstances: number;
   /** 懒创建实例；失败时抛出并记录到 errors。 */
@@ -100,6 +103,7 @@ const Context = createContext<RepoInstancesContextValue>({
   errors: {},
   creating: {},
   revision: 0,
+  openProgress: {},
   maxInstances: DEFAULT_MAX_INSTANCES,
   createInstance: async () => { throw new Error('RepoInstancesProvider not mounted'); },
   activateGroup: async () => {},
@@ -130,6 +134,12 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
   const adminRepoRef = useRef(repo);
   adminRepoRef.current = repo;
 
+  const [revision, setRevision] = useState(0);
+  const [creating, setCreating] = useState<Record<string, boolean>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  /** appId → 打开阶段（阶段与计数来自注册表 / repo 的真实信号）。 */
+  const [openProgress, setOpenProgress] = useState<Record<string, OpenProgressStage>>({});
+
   const registryRef = useRef<RepoInstanceRegistry | null>(null);
   if (!registryRef.current) {
     registryRef.current = new RepoInstanceRegistry({
@@ -140,6 +150,12 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
         backendInfo: { type: backend.type, options: backend.options },
         primaryBackendId: backend.id,
       }),
+      onProgress: update => {
+        setOpenProgress(prev => ({
+          ...prev,
+          [update.appId]: { stage: update.stage, detail: update.detail, pairs: update.pairs },
+        }));
+      },
       getRemoteBackend: async () => {
         const adminRepo = adminRepoRef.current;
         // 冷启动 / Reconnect 期间 admin 配置仓还没就绪：这是暂时状态，不应误报成「没有后端」。
@@ -154,10 +170,6 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
   }
   const registry = registryRef.current;
 
-  const [revision, setRevision] = useState(0);
-  const [creating, setCreating] = useState<Record<string, boolean>>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
-
   const bump = useCallback(() => setRevision(v => v + 1), []);
   const clearError = useCallback((appId: string) => {
     setErrors(prev => {
@@ -169,6 +181,14 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
   }, []);
   const recordError = useCallback((appId: string, message: string) => {
     setErrors(prev => ({ ...prev, [appId]: message }));
+  }, []);
+  const clearProgress = useCallback((appId: string) => {
+    setOpenProgress(prev => {
+      if (!(appId in prev)) return prev;
+      const next = { ...prev };
+      delete next[appId];
+      return next;
+    });
   }, []);
 
   const createInstance = useCallback(async (appId: string, onlyGroupId?: string | null) => {
@@ -186,9 +206,10 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
         delete next[appId];
         return next;
       });
+      clearProgress(appId);
       bump();
     }
-  }, [registry, bump, clearError, recordError]);
+  }, [registry, bump, clearError, recordError, clearProgress]);
 
   const releaseInstance = useCallback(async (appId: string) => {
     clearError(appId);
@@ -247,8 +268,17 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
   const removeGroup = useCallback((appId: string, groupId: string) =>
     runGroupOp(appId, () => registry.removeGroup(appId, groupId)), [registry, runGroupOp]);
 
-  const activateGroup = useCallback((appId: string, groupId: string) =>
-    runGroupOp(appId, async () => { await registry.activateGroup(appId, groupId); }), [registry, runGroupOp]);
+  const activateGroup = useCallback(async (appId: string, groupId: string) => {
+    setOpenProgress(prev => ({
+      ...prev,
+      [appId]: { stage: 'activate', detail: `组「${groupId}」`, pairs: [] },
+    }));
+    try {
+      await runGroupOp(appId, async () => { await registry.activateGroup(appId, groupId); });
+    } finally {
+      clearProgress(appId);
+    }
+  }, [registry, runGroupOp, clearProgress]);
 
   const refreshInstance = useCallback((appId: string) =>
     runGroupOp(appId, () => registry.refresh(appId)), [registry, runGroupOp]);
@@ -280,6 +310,7 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
       errors,
       creating,
       revision,
+      openProgress,
       maxInstances: DEFAULT_MAX_INSTANCES,
       createInstance,
       activateGroup,

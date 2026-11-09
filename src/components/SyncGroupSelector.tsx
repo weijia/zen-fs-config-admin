@@ -13,6 +13,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSyncTarget } from '../context/SyncTargetContext';
 import { targetKindLabel } from '../sync-target';
+import { OPEN_STAGE_LABELS } from '../open-progress';
 import AppInstanceManager from './AppInstanceManager';
 
 function stateDotClass(state: string): string {
@@ -30,6 +31,7 @@ export default function SyncGroupSelector() {
     selectedKey,
     selectedOption,
     opening,
+    openProgress,
     error,
     openedAppIds,
     maxInstances,
@@ -169,7 +171,11 @@ export default function SyncGroupSelector() {
         </span>
         {!configSelected && <span className="sync-target-appid">{selected.appId}</span>}
         <span className="sync-target-trigger-label">{triggerLabel}</span>
-        {opening && <span style={{ fontSize: 11, color: 'var(--warning)' }}>打开中…</span>}
+        {opening && (
+          <span style={{ fontSize: 11, color: 'var(--warning)' }}>
+            {openProgress ? `${OPEN_STAGE_LABELS[openProgress.stage]}…` : '打开中…'}
+          </span>
+        )}
         {error && <span style={{ fontSize: 11, color: 'var(--danger)' }}>失败</span>}
         <span style={{ marginLeft: 4, color: 'var(--text-muted)' }}>▾</span>
       </button>
