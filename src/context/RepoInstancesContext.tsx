@@ -122,11 +122,13 @@ function errorMessage(err: unknown): string {
 export function RepoInstancesProvider({ children }: { children: ReactNode }) {
   const { repo } = useConfigRepo();
 
-  /** 始终指向最新的 admin repo（reconnect 后仍能取到远端后端信息）。 */
+  /**
+   * 始终指向最新的 admin repo（reconnect 后仍能取到远端后端信息）。
+   * 这里在渲染期同步赋值：子 Provider 的 effect 先于父组件的 effect 执行，
+   * 若放到 useEffect 里，自动打开会读到上一轮的 null 而误判为「未就绪」。
+   */
   const adminRepoRef = useRef(repo);
-  useEffect(() => {
-    adminRepoRef.current = repo;
-  }, [repo]);
+  adminRepoRef.current = repo;
 
   const registryRef = useRef<RepoInstanceRegistry | null>(null);
   if (!registryRef.current) {
