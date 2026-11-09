@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IConfigRepo } from 'zen-fs-config';
-import { RepoInstanceRegistry, type RemoteBackendInfo } from '../repo-instances';
+import { RepoInstanceRegistry, type RemoteBackendInfo, type RemoteBackendLookup } from '../repo-instances';
 
 /** 记录调用的假 repo / group，用于验证「写操作落到正确实例」。 */
 interface FakeRepo {
@@ -141,8 +141,10 @@ const REMOTE_BACKEND: RemoteBackendInfo = {
   options: { owner: 'o', repo: 'r' },
 };
 
+const OK_LOOKUP: RemoteBackendLookup = { status: 'ok', backend: REMOTE_BACKEND };
+
 function makeRegistry(overrides: {
-  getRemoteBackend?: () => Promise<RemoteBackendInfo | null>;
+  getRemoteBackend?: () => Promise<RemoteBackendLookup>;
   maxInstances?: number;
 } = {}) {
   const created: FakeRepo[] = [];
@@ -152,7 +154,7 @@ function makeRegistry(overrides: {
       created.push(repo);
       return repo as unknown as IConfigRepo;
     },
-    getRemoteBackend: overrides.getRemoteBackend ?? (async () => REMOTE_BACKEND),
+    getRemoteBackend: overrides.getRemoteBackend ?? (async () => OK_LOOKUP),
     maxInstances: overrides.maxInstances,
   });
   return { registry, created };
@@ -186,7 +188,7 @@ describe('RepoInstanceRegistry', () => {
     const repo = makeFakeRepo('app-a', { descriptors });
     const registry = new RepoInstanceRegistry({
       createRepo: async () => repo as unknown as IConfigRepo,
-      getRemoteBackend: async () => REMOTE_BACKEND,
+      getRemoteBackend: async () => OK_LOOKUP,
     });
 
     const instance = await registry.create('app-a', 'g2');
@@ -203,7 +205,7 @@ describe('RepoInstanceRegistry', () => {
     const repo = makeFakeRepo('app-a', { descriptors });
     const registry = new RepoInstanceRegistry({
       createRepo: async () => repo as unknown as IConfigRepo,
-      getRemoteBackend: async () => REMOTE_BACKEND,
+      getRemoteBackend: async () => OK_LOOKUP,
     });
 
     await registry.create('app-a', 'g1');
@@ -319,18 +321,48 @@ describe('RepoInstanceRegistry', () => {
   it('创建失败：factory 抛错时带上原因且不注册实例', async () => {
     const registry = new RepoInstanceRegistry({
       createRepo: async () => { throw new Error('credential missing'); },
-      getRemoteBackend: async () => REMOTE_BACKEND,
+      getRemoteBackend: async () => OK_LOOKUP,
     });
     await expect(registry.create('app-a')).rejects.toThrow(/credential missing/);
     expect(registry.has('app-a')).toBe(false);
   });
 
-  it('创建失败：没有远端后端时给出明确错误', async () => {
+  it('创建失败：admin 已就绪但没有远端后端时保留原文案', async () => {
+    const created: FakeRepo[] = [];
     const registry = new RepoInstanceRegistry({
-      createRepo: async () => makeFakeRepo('x') as unknown as IConfigRepo,
-      getRemoteBackend: async () => null,
+      createRepo: async appId => {
+        const repo = makeFakeRepo(appId);
+        created.push(repo);
+        return repo as unknown as IConfigRepo;
+      },
+      getRemoteBackend: async () => ({ status: 'none' }),
     });
-    await expect(registry.create('app-a')).rejects.toThrow(/没有可用的远端配置后端/);
+    const err = await registry.create('app-a').catch((e: Error) => e);
+    if (!(err instanceof Error)) throw new Error('create() 未按预期抛出错误');
+    expect(err.message).toBe(
+      '实例创建失败：admin 没有可用的远端配置后端，无法为 appId「app-a」加载组描述符。' +
+      '请先在 Backends 页为 admin 配置远端后端。',
+    );
+    expect(created).toHaveLength(0);
+    expect(registry.has('app-a')).toBe(false);
+  });
+
+  it('创建失败：admin 尚未就绪时提示稍后重试，而不是误导用户去配置后端', async () => {
+    const created: FakeRepo[] = [];
+    const registry = new RepoInstanceRegistry({
+      createRepo: async appId => {
+        const repo = makeFakeRepo(appId);
+        created.push(repo);
+        return repo as unknown as IConfigRepo;
+      },
+      getRemoteBackend: async () => ({ status: 'not-ready' }),
+    });
+    const err = await registry.create('app-a').catch((e: Error) => e);
+    if (!(err instanceof Error)) throw new Error('create() 未按预期抛出错误');
+    expect(err.message).toMatch(/admin 配置仓尚未就绪/);
+    expect(err.message).toMatch(/请稍后重试/);
+    expect(err.message).not.toMatch(/请先在 Backends 页/);
+    expect(created).toHaveLength(0);
     expect(registry.has('app-a')).toBe(false);
   });
 
@@ -342,7 +374,7 @@ describe('RepoInstanceRegistry', () => {
         created.push(repo);
         return repo as unknown as IConfigRepo;
       },
-      getRemoteBackend: async () => REMOTE_BACKEND,
+      getRemoteBackend: async () => OK_LOOKUP,
     });
 
     const err = await registry.create('app-a').catch((e: Error) => e);
@@ -361,7 +393,7 @@ describe('RepoInstanceRegistry', () => {
         created.push(repo);
         return repo as unknown as IConfigRepo;
       },
-      getRemoteBackend: async () => REMOTE_BACKEND,
+      getRemoteBackend: async () => OK_LOOKUP,
     });
 
     await expect(registry.create('app-a')).rejects.toThrow(/missing token/);

@@ -29,6 +29,20 @@ export interface RemoteBackendInfo {
   options: Record<string, unknown>;
 }
 
+/**
+ * admin 远端后端查询结果：
+ *   · `ok`       取到了可用的远端副本后端；
+ *   · `not-ready` admin 配置仓尚未就绪（冷启动 / 重连中），稍后重试即可；
+ *   · `none`      admin 已就绪但确实没有配置远端副本后端。
+ *
+ * `not-ready` 与 `none` 必须分开，否则会给用户看到
+ * 「请先在 Backends 页为 admin 配置远端后端」这类误导性提示。
+ */
+export type RemoteBackendLookup =
+  | { status: 'ok'; backend: RemoteBackendInfo }
+  | { status: 'not-ready' }
+  | { status: 'none' };
+
 /** 一个已创建的 appId 实例。 */
 export interface RepoInstance {
   appId: string;
@@ -55,8 +69,11 @@ export interface RepoInstanceStatus {
 export interface RepoInstanceRegistryOptions {
   /** 用给定 appId + 远端后端创建 repo（生产实现包 createConfigRepo）。 */
   createRepo: (appId: string, backend: RemoteBackendInfo) => Promise<IConfigRepo>;
-  /** 读取 admin 的远端后端；返回 null 时实例创建会给出明确错误。 */
-  getRemoteBackend: () => Promise<RemoteBackendInfo | null>;
+  /**
+   * 读取 admin 的远端后端。
+   * 未就绪返回 `not-ready`（可重试），确实没有远端后端返回 `none`。
+   */
+  getRemoteBackend: () => Promise<RemoteBackendLookup>;
   /** 并发实例上限，默认 3。 */
   maxInstances?: number;
 }
@@ -156,18 +173,24 @@ export class RepoInstanceRegistry {
       );
     }
 
-    let backend: RemoteBackendInfo | null;
+    let lookup: RemoteBackendLookup;
     try {
-      backend = await this.options.getRemoteBackend();
+      lookup = await this.options.getRemoteBackend();
     } catch (err) {
       throw new Error(`实例创建失败：读取 admin 远端后端配置失败：${messageOf(err)}`);
     }
-    if (!backend) {
+    if (lookup.status === 'not-ready') {
+      throw new Error(
+        `实例创建失败：admin 配置仓尚未就绪，暂时无法为 appId「${appId}」加载组描述符，请稍后重试。`,
+      );
+    }
+    if (lookup.status === 'none') {
       throw new Error(
         `实例创建失败：admin 没有可用的远端配置后端，无法为 appId「${appId}」加载组描述符。` +
         '请先在 Backends 页为 admin 配置远端后端。',
       );
     }
+    const backend = lookup.backend;
 
     let repo: IConfigRepo;
     try {

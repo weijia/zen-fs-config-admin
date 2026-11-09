@@ -140,12 +140,13 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
       }),
       getRemoteBackend: async () => {
         const adminRepo = adminRepoRef.current;
-        if (!adminRepo) return null;
+        // 冷启动 / Reconnect 期间 admin 配置仓还没就绪：这是暂时状态，不应误报成「没有后端」。
+        if (!adminRepo) return { status: 'not-ready' };
         const meta = await adminRepo.getBackends();
         // `getBackends()` 的首项是隐式的本地 IndexedDB 主存储；实例需要的是远端副本。
         const replica = (meta?.backends ?? []).find(b => b.id !== 'local-idb');
-        if (!replica) return null;
-        return { id: replica.id, type: replica.type, options: replica.options };
+        if (!replica) return { status: 'none' };
+        return { status: 'ok', backend: { id: replica.id, type: replica.type, options: replica.options } };
       },
     });
   }

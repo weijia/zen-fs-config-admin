@@ -400,14 +400,25 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
     }
   }, [createInstance, activateGroup, getInstance, dataGroups, refreshDataGroups]);
 
-  // 选中即后台打开；失败后停住，不自动回退 / 不自动重试。
+  // admin 配置仓首次就绪或 Reconnect 重建后，清除失败与「已尝试」标记，
+  // 让失败态可以在重连后自动恢复，不必手动点「重试」。
   useEffect(() => {
+    if (!repo) return;
+    attemptedRef.current.clear();
+    setFailedKeys(prev => (Object.keys(prev).length ? {} : prev));
+    setLocalErrors(prev => (Object.keys(prev).length ? {} : prev));
+  }, [repo]);
+
+  // 选中即后台打开；admin 配置仓未就绪时先不尝试（否则会误报「没有远端后端」），
+  // 就绪后本 effect 会因 repo 变化重跑。失败后停住，不自动回退 / 不自动重试。
+  useEffect(() => {
+    if (!repo) return;
     if (ready || opening) return;
     if (failedKeys[selectedKey]) return;
     if (attemptedRef.current.has(selectedKey)) return;
     attemptedRef.current.add(selectedKey);
     void runOpen(selected, selectedKey);
-  }, [selectedKey, selected, ready, opening, failedKeys, runOpen]);
+  }, [repo, selectedKey, selected, ready, opening, failedKeys, runOpen]);
 
   const clearAttempt = useCallback((key: string) => {
     attemptedRef.current.delete(key);
