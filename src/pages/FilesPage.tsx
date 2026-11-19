@@ -64,6 +64,38 @@ interface TreeNode {
   children: TreeNode[];
 }
 
+/**
+ * 写同步元数据（如 `.meta/group.json`）：框架先返回 ECONFIRM，这里警告用户，
+ * 明确同意后带 `{ confirm: true }` 重试；用户取消则不落盘。
+ */
+async function writeWithConfirm(fs: any, path: string, data: string, opts?: any): Promise<void> {
+  try {
+    await fs.writeFile(path, data, opts);
+  } catch (err: any) {
+    if (err?.code !== 'ECONFIRM') throw err;
+    const ok = window.confirm(
+      `「${path}」是同步元数据（组身份 / 同步边界），修改会影响该同步组的身份与同步行为。\n\n确定要写入吗？`,
+    );
+    if (!ok) throw new Error('已取消：未写入同步元数据');
+    await fs.writeFile(path, data, { ...(opts ?? {}), confirm: true });
+  }
+}
+
+/** 删除同步元数据同样需要确认（删掉 `.meta/group.json` 等于丢弃组身份）。 */
+async function deleteWithConfirm(fs: any, path: string, isDir: boolean): Promise<void> {
+  const attempt = (opts?: any) => (isDir ? fs.rmdir(path, opts) : fs.unlink(path, opts));
+  try {
+    await attempt();
+  } catch (err: any) {
+    if (err?.code !== 'ECONFIRM') throw err;
+    const ok = window.confirm(
+      `「${path}」是同步元数据（组身份），删除会让该组丢失身份信息。\n\n确定要删除吗？`,
+    );
+    if (!ok) throw new Error('已取消：未删除同步元数据');
+    await attempt({ confirm: true });
+  }
+}
+
 /** 读取一层目录。 */
 async function loadChildren(fs: any, dir: string, prefix = ''): Promise<TreeNode[]> {
   const entries: TreeNode[] = [];
@@ -291,7 +323,7 @@ export default function FilesPage() {
     try {
       if (selected.kind === 'data') {
         const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
-        await fs.writeFile(fsPath, data);
+        await writeWithConfirm(fs, fsPath, data);
         const synced = (await flushTarget()).length;
         setMessage(synced ? `Saved（已触发同步：${synced} 个目标）` : 'Saved（已写入本地）');
       } else {
@@ -383,8 +415,7 @@ export default function FilesPage() {
         // 删除必须走组 fs 的 unlink / rmdir，才能写墓碑并传播到各后端。
         const st = await fs.stat(fsPath);
         const isDir = st.mode !== undefined && (st.mode & 0o40000) === 0o40000;
-        if (isDir) await fs.rmdir(fsPath);
-        else await fs.unlink(fsPath);
+        await deleteWithConfirm(fs, fsPath, isDir);
         const synced = (await flushTarget()).length;
         setMessage(synced ? `Deleted（已触发同步：${synced} 个目标）` : 'Deleted（已写入本地）');
       } else {
