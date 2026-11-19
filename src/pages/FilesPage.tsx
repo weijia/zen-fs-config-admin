@@ -295,13 +295,17 @@ export default function FilesPage() {
         const synced = (await flushTarget()).length;
         setMessage(synced ? `Saved（已触发同步：${synced} 个目标）` : 'Saved（已写入本地）');
       } else {
+        // 配置组浏览的是配置仓根（fsPath 与 cachedFS 路径一致，没有 /${appId} 前缀），
+        // 所以不能走 setConfig（它会把路径拼成 /${appId}/...，写进影子目录）。
         const repoHandle = handle as any;
-        if (isJson) {
-          repoHandle.setConfig(fsPath, JSON.parse(content));
+        const data = isJson ? JSON.stringify(JSON.parse(content), null, 2) : content;
+        if (typeof repoHandle?.writeRepoFile === 'function') {
+          await repoHandle.writeRepoFile(fsPath, data);
         } else {
-          await fs.writeFile(fsPath, content);
+          await fs.writeFile(fsPath, data);
         }
-        setMessage('Saved');
+        const synced = (await flushTarget()).length;
+        setMessage(synced ? `Saved（已触发同步：${synced} 个目标）` : 'Saved（已写入本地）');
       }
       setOriginalContent(content);
     } catch (err: any) {
