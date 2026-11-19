@@ -7,9 +7,16 @@ export type BackendScopeKind = 'config' | 'data';
 export interface DeclaredBackendRow extends AppDataBackendDescriptor {
   connection: 'connected' | 'failed' | 'pending';
   errorMessage?: string;
+  /**
+   * 因「远端根属于另一个同步组」被跳过时的原因。
+   *
+   * 这类后端不会建同步对，`getBackendSyncStates()` 里既没有 pairId 也没有 error，
+   * 只靠状态会显示成「未处理」——把库里的跳过原因透到 UI，用户才知道为什么没有数据。
+   */
+  skipReason?: string;
 }
 
-/** 当前作用域是否提供编辑能力（本版只有配置组可写，数据组只读）。 */
+/** 当前作用域是否提供编辑能力（配置组与数据组都可写，写的是各自的后端定义）。 */
 export interface ScopeCapabilities {
   canAdd: boolean;
   canEdit: boolean;
@@ -29,7 +36,7 @@ export interface BackendScopeView {
 type DeclaredBackendHandle = Pick<
   SyncGroupHandle,
   'listDeclaredBackends' | 'getBackendSyncStates'
->;
+> & Partial<Pick<SyncGroupHandle, 'listSkippedBackends'>>;
 
 /**
  * 把后端同步状态归一成三态：
@@ -49,10 +56,11 @@ export function describeBackendConnection(
   return { connection: 'pending' };
 }
 
-/** 连接状态的展示文案；失败时带上完整原文。 */
+/** 连接状态的展示文案；失败/跳过时带上完整原因原文。 */
 export function backendConnectionText(
-  row: Pick<DeclaredBackendRow, 'connection' | 'errorMessage'>,
+  row: Pick<DeclaredBackendRow, 'connection' | 'errorMessage' | 'skipReason'>,
 ): string {
+  if (row.skipReason) return `已跳过：${row.skipReason}`;
   switch (row.connection) {
     case 'connected':
       return '已连接';
@@ -72,9 +80,13 @@ export function collectDeclaredBackends(
 ): DeclaredBackendRow[] {
   if (!handle) return [];
   const states = handle.getBackendSyncStates();
+  const skipped = new Map(
+    (handle.listSkippedBackends?.() ?? []).map(s => [s.backendId, s.reason] as const),
+  );
   return handle.listDeclaredBackends().map((backend) => ({
     ...backend,
     ...describeBackendConnection(states.get(backend.id)),
+    ...(skipped.has(backend.id) ? { skipReason: skipped.get(backend.id) } : {}),
   }));
 }
 
@@ -116,12 +128,12 @@ export function resolveScopedBackends(
 }
 
 /**
- * 本版的上半栏只读；编辑能力只属于配置同步组（合并进下半栏）。
- * 组件用这份能力表来决定是否渲染写控件。
+ * 两个作用域都提供写能力：写的是各自组 `.meta/backends/` 的权威定义。
+ * 数据组没有 enabled/disabled 开关（启用即建同步对，删除即断），所以 canToggle 为 false。
  */
 export function scopeCapabilities(kind: BackendScopeKind): ScopeCapabilities {
   if (kind === 'data') {
-    return { canAdd: false, canEdit: false, canRemove: false, canToggle: false };
+    return { canAdd: true, canEdit: true, canRemove: true, canToggle: false };
   }
   return { canAdd: true, canEdit: true, canRemove: true, canToggle: true };
 }
@@ -136,10 +148,10 @@ export function describeBackendScope(ref: {
     return {
       kind: 'data',
       title: `数据组 ${ref.appId} / ${ref.groupId}`,
-      subtitle: '该数据组自己的同步后端（只读）',
+      subtitle: '该数据组自己的同步后端',
       sourceNote:
-        '数据源：组内 .meta/backends/（权威声明），不是配置组描述符里的引导副本。编辑入口在 Data Groups 页。',
-      readOnly: true,
+        '数据源：组内 .meta/backends/（权威声明），不是配置组描述符里的引导副本。增删改直接写这份权威定义并重建同步对。',
+      readOnly: false,
     };
   }
   return {

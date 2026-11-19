@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useConfigRepo } from '../context/ConfigRepoContext';
+import { useRepoInstances } from '../context/RepoInstancesContext';
 import { useSyncTarget } from '../context/SyncTargetContext';
 import type { BackendDescriptor, BackendSyncState } from 'zen-fs-config';
 import { getBackendTypeDef, getBackendTypes } from '../backend-types';
@@ -17,21 +18,24 @@ import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:backends');
 
-function ConnectionBadge({ row }: { row: Pick<DeclaredBackendRow, 'connection' | 'errorMessage'> }) {
-  const color = row.connection === 'connected'
-    ? 'var(--success)'
-    : row.connection === 'failed'
-      ? 'var(--danger)'
-      : 'var(--text-muted)';
+function ConnectionBadge({ row }: { row: Pick<DeclaredBackendRow, 'connection' | 'errorMessage' | 'skipReason'> }) {
+  const color = row.skipReason
+    ? 'var(--warning, #b8860b)'
+    : row.connection === 'connected'
+      ? 'var(--success)'
+      : row.connection === 'failed'
+        ? 'var(--danger)'
+        : 'var(--text-muted)';
   return (
-    <span title={row.errorMessage} style={{ fontSize: 12, color }}>
+    <span title={row.skipReason ?? row.errorMessage} style={{ fontSize: 12, color }}>
       {backendConnectionText(row)}
     </span>
   );
 }
 
 export default function BackendsPage() {
-  const { repo, reconnect, primaryBackendId } = useConfigRepo();
+  const { repo, reconnect, primaryBackendId, refreshDataGroups } = useConfigRepo();
+  const { replaceBackend, refreshInstance } = useRepoInstances();
   const {
     selected,
     selectedOption,
@@ -142,7 +146,19 @@ export default function BackendsPage() {
   };
 
   const handleSave = async () => {
-    if (!repo || !formState.id || !formState.type) return;
+    if (!formState.id || !formState.type) return;
+
+    // 数据组作用域：写的是该组自己的权威定义（不是配置仓）。
+    if (isDataScope) {
+      if (isNew) {
+        await handleAddDataBackend();
+      } else if (editing?.id) {
+        await handleEditDataBackend(editing.id);
+      }
+      return;
+    }
+
+    if (!repo) return;
 
     // Close modal immediately
     setEditing(null);
@@ -207,6 +223,97 @@ export default function BackendsPage() {
     await loadBackends();
   };
 
+  /** 数据组作用域的写操作完成后刷新组快照（句柄与后端列表都会换新）。 */
+  const refreshScope = useCallback(async () => {
+    if (selected.appId === 'admin') await refreshDataGroups();
+    else await refreshInstance(selected.appId);
+  }, [selected.appId, refreshDataGroups, refreshInstance]);
+
+  /** 数据组作用域：新增后端（写组内 .meta/backends/ 权威定义）。 */
+  const handleAddDataBackend = async () => {
+    if (!formState.id || !formState.type) return;
+    if (!targetHandle) {
+      setMessage('该数据组尚未激活，无法修改后端（请先切换并打开该组）');
+      setTimeout(() => setMessage(''), 5000);
+      return;
+    }
+    if (scoped.rows.some(r => r.id === formState.id)) {
+      setMessage('Backend ID already exists');
+      setTimeout(() => setMessage(''), 4000);
+      return;
+    }
+    setEditing(null);
+    setIsNew(false);
+    try {
+      await targetHandle.addBackend(
+        formState.id,
+        formState.type,
+        formState.options ?? {},
+        formState.description,
+      );
+      setMessage(`Backend ${formState.id} added`);
+      setTimeout(() => setMessage(''), 3000);
+      await refreshScope();
+    } catch (err: any) {
+      setMessage(`Failed to add: ${err?.message ?? err}`);
+      setTimeout(() => setMessage(''), 6000);
+    }
+  };
+
+  /**
+   * 数据组作用域：改参数（保留 backendId）。
+   * 组句柄本身没有 replace 能力，走 repo / 实例注册表的替换接口（会 dispose 旧组再重建）。
+   */
+  const handleEditDataBackend = async (editingId: string) => {
+    if (!selected.groupId || !formState.type) return;
+    setEditing(null);
+    setIsNew(false);
+    try {
+      if (selected.appId === 'admin') {
+        await repo!.replaceAppDataGroupBackend(
+          selected.groupId,
+          editingId,
+          formState.type,
+          formState.options ?? {},
+          formState.description,
+        );
+      } else {
+        await replaceBackend(
+          selected.appId,
+          selected.groupId,
+          editingId,
+          formState.type,
+          formState.options ?? {},
+          formState.description,
+        );
+      }
+      setMessage(`Backend ${editingId} updated`);
+      setTimeout(() => setMessage(''), 3000);
+      await refreshScope();
+    } catch (err: any) {
+      setMessage(`Failed to update: ${err?.message ?? err}`);
+      setTimeout(() => setMessage(''), 6000);
+    }
+  };
+
+  /** 数据组作用域：删除后端（写墓碑，避免对端复活）。 */
+  const handleRemoveDataBackend = async (id: string) => {
+    if (!targetHandle) {
+      setMessage('该数据组尚未激活，无法修改后端（请先切换并打开该组）');
+      setTimeout(() => setMessage(''), 5000);
+      return;
+    }
+    try {
+      await targetHandle.removeBackend(id);
+      setMessage(`Removed ${id}`);
+      setTimeout(() => setMessage(''), 3000);
+      await refreshScope();
+    } catch (err: any) {
+      setMessage(`Failed to remove: ${err?.message ?? err}`);
+      setTimeout(() => setMessage(''), 6000);
+    }
+  };
+
   if (!repo) return <div className="loading">No repo connected</div>;
 
   const def = getBackendTypeDef(formState.type);
@@ -240,7 +347,9 @@ export default function BackendsPage() {
           <h1 className="page-title">Backends</h1>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
             当前同步组：<strong>{selectedOption?.label ?? scope.title}</strong>
-            {isDataScope && <span className="badge" style={{ marginLeft: 6 }}>只读</span>}
+            {isDataScope && (scoped.source === 'data-group'
+              ? <span className="badge" style={{ marginLeft: 6 }}>可编辑</span>
+              : <span className="badge" style={{ marginLeft: 6 }}>只读（未激活）</span>)}
           </div>
         </div>
       </div>
@@ -253,7 +362,11 @@ export default function BackendsPage() {
               <div style={{ fontSize: 15, fontWeight: 600 }}>{scope.title}</div>
               <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{scope.subtitle}</div>
             </div>
-            <span className="badge">只读</span>
+            {scoped.source === 'data-group' && caps.canAdd ? (
+              <button className="btn btn-primary" onClick={handleNew}>+ Add Backend</button>
+            ) : (
+              <span className="badge">只读</span>
+            )}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
             {scope.sourceNote}
@@ -266,7 +379,7 @@ export default function BackendsPage() {
             ) : (
               <div className="table-wrapper">
                 <table>
-                  <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>连接状态</th></tr></thead>
+                  <thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Config</th><th>连接状态</th><th>Actions</th></tr></thead>
                   <tbody>
                     {scoped.rows.map(b => {
                       const bdef = getBackendTypeDef(b.type);
@@ -279,6 +392,15 @@ export default function BackendsPage() {
                             {serializeBackend(b)}
                           </td>
                           <td><ConnectionBadge row={b} /></td>
+                          <td>
+                            <button className="btn btn-sm btn-secondary" onClick={() => handleCopy(b)} title="Copy config">📋</button>
+                            {caps.canEdit && (
+                              <button className="btn btn-sm btn-secondary" onClick={() => handleEdit(b)} style={{ marginLeft: 4 }}>Edit</button>
+                            )}
+                            {caps.canRemove && (
+                              <button className="btn btn-sm btn-danger" onClick={() => handleRemoveDataBackend(b.id)} style={{ marginLeft: 4 }}>Remove</button>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -396,7 +518,7 @@ export default function BackendsPage() {
               {isDataScope ? '与上方数据组无关，仅影响 admin 配置仓' : scope.subtitle}
             </div>
           </div>
-          {caps.canAdd && <button className="btn btn-primary" onClick={handleNew}>+ Add Backend</button>}
+          {!isDataScope && caps.canAdd && <button className="btn btn-primary" onClick={handleNew}>+ Add Backend</button>}
         </div>
         {!isDataScope && (
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>

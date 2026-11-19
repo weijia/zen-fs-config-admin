@@ -16,10 +16,12 @@ function backend(id: string, type = 'Gitee'): AppDataBackendDescriptor {
 function handle(
   declared: AppDataBackendDescriptor[],
   states: Map<string, BackendSyncState>,
+  skipped?: { backendId: string; reason: string }[],
 ) {
   return {
     listDeclaredBackends: () => declared,
     getBackendSyncStates: () => states,
+    ...(skipped ? { listSkippedBackends: () => skipped } : {}),
   };
 }
 
@@ -70,14 +72,14 @@ describe('backend-scope', () => {
     ).toBe('失败：Gitee API 400: 文件新建失败');
   });
 
-  it('数据组作用域标注 .meta/backends 权威来源且只读', () => {
+  it('数据组作用域标注 .meta/backends 权威来源且可编辑', () => {
     const scope = describeBackendScope({ kind: 'data', appId: 'weijia432', groupId: 'dir-struct-gen' });
     expect(scope.title).toContain('weijia432');
     expect(scope.title).toContain('dir-struct-gen');
-    expect(scope.readOnly).toBe(true);
+    expect(scope.readOnly).toBe(false);
     expect(scope.sourceNote).toContain('.meta/backends/');
     expect(scope.sourceNote).toContain('引导副本');
-    expect(scope.sourceNote).toContain('Data Groups');
+    expect(scope.sourceNote).toContain('同步对');
   });
 
   it('配置组作用域标注 .config/backends 来源且可编辑', () => {
@@ -88,11 +90,11 @@ describe('backend-scope', () => {
     expect(scope.sourceNote).toContain('local-idb');
   });
 
-  it('数据组不提供任何写能力，页面的写控件因此不会渲染', () => {
+  it('数据组提供增删改写能力，但没有 enabled 开关', () => {
     expect(scopeCapabilities('data')).toEqual({
-      canAdd: false,
-      canEdit: false,
-      canRemove: false,
+      canAdd: true,
+      canEdit: true,
+      canRemove: true,
       canToggle: false,
     });
   });
@@ -108,6 +110,23 @@ describe('backend-scope', () => {
 
   it('当前组句柄缺失时返回空列表而不是报错', () => {
     expect(collectDeclaredBackends(null)).toEqual([]);
+  });
+
+  it('归属其他同步组被跳过的后端，把原因带到行上并显示「已跳过」', () => {
+    const h = handle(
+      [backend('gitee')],
+      new Map<string, BackendSyncState>(),
+      [{ backendId: 'gitee', reason: '远端根属于另一个同步组（instanceId 不一致），已跳过该后端' }],
+    );
+    const rows = collectDeclaredBackends(h);
+    expect(rows[0].skipReason).toContain('instanceId 不一致');
+    expect(backendConnectionText(rows[0])).toBe('已跳过：远端根属于另一个同步组（instanceId 不一致），已跳过该后端');
+  });
+
+  it('句柄没有 listSkippedBackends 时不注入 skipReason', () => {
+    const rows = collectDeclaredBackends(handle([backend('gitee')], new Map()));
+    expect(rows[0].skipReason).toBeUndefined();
+    expect(backendConnectionText(rows[0])).toBe('未处理');
   });
 });
 
