@@ -9,6 +9,7 @@ import type { BackendDescriptor, AppDataBackendDescriptor } from 'zen-fs-config'
 import { useRepoInstances } from '../context/RepoInstancesContext';
 import { getBackendTypeDef, getBackendTypes } from '../backend-types';
 import { serializeBackend, deserializeBackend } from '../backend-config-string';
+import GroupInstanceId from './GroupInstanceId';
 
 /** 编辑后端时的表单草稿。 */
 interface BackendDraft {
@@ -37,6 +38,18 @@ function emptyDraft(): BackendDraft {
     description: '',
     accountBackendId: '',
   };
+}
+
+/** 该 appId 实例自己的配置组实例身份（`.meta/group.json` 的 `instanceId`）。 */
+function repoInstanceId(repo: unknown): string | undefined {
+  try {
+    const fn = (repo as { getGroupInstanceId?: () => string | undefined } | null | undefined)?.getGroupInstanceId;
+    if (typeof fn !== 'function') return undefined;
+    const value = fn.call(repo);
+    return typeof value === 'string' && value ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function draftFromDescriptor(b: AppDataBackendDescriptor): BackendDraft {
@@ -266,6 +279,7 @@ export default function AppInstanceManager({ appId, onClose }: { appId: string; 
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
           <span className="badge badge-primary">{appId}</span>
           <span>远端后端：{instance.backendId}</span>
+          <GroupInstanceId id={repoInstanceId(instance.repo)} label="配置组 ID" />
           <span>已加载组：{status?.groupCount ?? 0}（激活 {status?.activeGroupCount ?? 0}）</span>
           <span>同步对：{status?.pairCount ?? 0} · {status?.watchingCount ? '同步中' : '未在同步'}</span>
           <span style={{ color: 'var(--text-muted)' }}>使用独立实例，可释放</span>
@@ -303,6 +317,7 @@ export default function AppInstanceManager({ appId, onClose }: { appId: string; 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <strong style={{ fontSize: 13 }}>{group.id}</strong>
               {group.name && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{group.name}</span>}
+              <GroupInstanceId id={group.instanceId} />
               {group.error && <span className="badge badge-danger">激活失败</span>}
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{(group.backends ?? []).length} 个后端</span>
               {rename?.groupId === group.id ? (

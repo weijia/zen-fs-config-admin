@@ -67,6 +67,18 @@ function safeBackendsCount(repo: unknown): number {
   }
 }
 
+/** 组实例身份（`.meta/group.json` 的 `instanceId`）；句柄不支持或读取失败时为 undefined。 */
+function safeInstanceId(handle: unknown): string | undefined {
+  try {
+    const fn = (handle as { getGroupInstanceId?: () => string | undefined } | null | undefined)?.getGroupInstanceId;
+    if (typeof fn !== 'function') return undefined;
+    const value = fn.call(handle);
+    return typeof value === 'string' && value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 读取本地记忆，兼容旧格式（`config:<appId>` → `config`）。 */
 function readStoredKey(): string {
   try {
@@ -119,6 +131,11 @@ interface SyncTargetContextValue {
   selected: SyncTargetRef;
   selectedKey: string;
   selectedOption: SyncTargetOption | null;
+  /**
+   * 当前组的实例身份（UUID，来自组 `.meta/group.json`）：同步边界，跨组不同步。
+   * 组尚未打开时回退到描述符里的副本；两者都没有时为 null。
+   */
+  instanceId: string | null;
   /** 当前组句柄（配置组 = repo；数据组 = 已激活的组）。未打开时为 null。 */
   handle: SyncGroupHandle | null;
   /** 当前组的 fs（组根 chroot）。未打开时为 null。 */
@@ -158,6 +175,7 @@ const Context = createContext<SyncTargetContextValue>({
   selected: DEFAULT_SYNC_TARGET,
   selectedKey: DEFAULT_SYNC_TARGET_KEY,
   selectedOption: null,
+  instanceId: null,
   handle: null,
   fs: null,
   ready: false,
@@ -265,6 +283,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
         appId: 'admin',
         open: true,
         creating: false,
+        instanceId: safeInstanceId(repo),
         backendsCount: safeBackendsCount(repo),
         pairCount: statuses.size,
         watchingCount: Array.from(statuses.values()).filter(s => s.watching).length,
@@ -274,6 +293,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
             appId: 'admin',
             groupId: g.id,
             name: g.name,
+            instanceId: g.instanceId ?? safeInstanceId(g.group),
             backendsCount: g.backends?.length ?? 0,
             pairCount: groupStatuses.size,
             watchingCount: Array.from(groupStatuses.values()).filter(s => s.watching).length,
@@ -288,6 +308,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
         appId: view.appId,
         open: true,
         creating: !!creating[view.appId],
+        instanceId: safeInstanceId(getInstance(view.appId)?.repo),
         backendsCount: safeBackendsCount(getInstance(view.appId)?.repo),
         pairCount: view.status.pairCount,
         watchingCount: view.status.watchingCount,
@@ -298,6 +319,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
             appId: view.appId,
             groupId: g.id,
             name: g.name,
+            instanceId: g.instanceId ?? safeInstanceId(g.group),
             backendsCount: g.backends?.length ?? 0,
             pairCount: groupStatuses.size,
             watchingCount: Array.from(groupStatuses.values()).filter(s => s.watching).length,
@@ -365,6 +387,10 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
   }, [handle, selected.kind, repo]);
 
   const ready = !!handle;
+  const instanceId = useMemo(
+    () => safeInstanceId(handle) ?? selectedOption?.instanceId ?? null,
+    [handle, selectedOption],
+  );
   const opening = !!openingKeys[selectedKey]
     || (selected.kind === 'data' && selected.appId !== 'admin' && !!creating[selected.appId] && !ready);
 
@@ -538,6 +564,7 @@ export function SyncTargetProvider({ children }: { children: ReactNode }) {
       selected,
       selectedKey,
       selectedOption,
+      instanceId,
       handle,
       fs,
       ready,

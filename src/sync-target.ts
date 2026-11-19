@@ -66,6 +66,8 @@ export interface SyncTargetGroupSnapshot {
   appId: string;
   groupId: string;
   name?: string;
+  /** 组实例身份（组 `.meta/group.json` 的 `instanceId`）。 */
+  instanceId?: string;
   backendsCount: number;
   pairCount: number;
   watchingCount: number;
@@ -80,6 +82,8 @@ export interface SyncTargetInstanceSnapshot {
   open: boolean;
   creating: boolean;
   error?: string;
+  /** 配置组的实例身份（`.meta/group.json` 的 `instanceId`）。 */
+  instanceId?: string;
   /** 配置本身声明的后端数量。 */
   backendsCount: number;
   /** 配置组自身的同步对数量。 */
@@ -95,6 +99,8 @@ export interface SyncTargetOption {
   ref: SyncTargetRef;
   key: string;
   label: string;
+  /** 组实例身份（UUID）。同步边界：不同 instanceId 的两个组不会建同步对。 */
+  instanceId?: string;
   openState: TargetOpenState;
   health: TargetSyncHealth;
   /** 行内状态说明（「已打开 · 2 个后端 · 2 对」/「首次选择将建立实例并同步」）。 */
@@ -137,6 +143,7 @@ function configOption(snapshot: SyncTargetInstanceSnapshot | undefined): SyncTar
     ref: { kind: 'config', appId: 'admin', groupId: null },
     key: DEFAULT_SYNC_TARGET_KEY,
     label: '配置同步组',
+    instanceId: snapshot?.instanceId,
     openState,
     health: healthOf(open, snapshot?.watchingCount ?? 0, error),
     detail,
@@ -175,6 +182,7 @@ function dataOption(
     ref,
     key: targetKey(ref),
     label,
+    instanceId: snapshot?.instanceId ?? descriptor?.instanceId ?? undefined,
     openState,
     health: healthOf(open, snapshot?.watchingCount ?? 0, error),
     detail,

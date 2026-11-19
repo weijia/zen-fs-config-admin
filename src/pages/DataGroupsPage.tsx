@@ -6,6 +6,7 @@ import type { AppDataBackendDescriptor, AppDataGroupDescriptor } from 'zen-fs-co
 import type { DataGroupInfo } from '../data-group-activation';
 import { getBackendTypeDef, getBackendTypes } from '../backend-types';
 import { serializeBackend, deserializeBackend } from '../backend-config-string';
+import GroupInstanceId from '../components/GroupInstanceId';
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:data-groups');
@@ -123,9 +124,9 @@ export default function DataGroupsPage() {
   }, [dataGroups, isAdmin, activateGroup, appId, getInstance]);
 
   const rows = useMemo(() => {
-    const map = new Map<string, { id: string; name?: string; info?: DataGroupInfo; declared: number }>();
+    const map = new Map<string, { id: string; name?: string; info?: DataGroupInfo; declared: number; instanceId?: string }>();
     for (const d of descriptors) {
-      map.set(d.id, { id: d.id, name: d.name, declared: d.backends?.length ?? 0 });
+      map.set(d.id, { id: d.id, name: d.name, declared: d.backends?.length ?? 0, instanceId: d.instanceId ?? undefined });
     }
     for (const g of dataGroups) {
       const prev = map.get(g.id);
@@ -134,6 +135,7 @@ export default function DataGroupsPage() {
         name: g.name ?? prev?.name,
         info: g,
         declared: g.backends?.length ?? prev?.declared ?? 0,
+        instanceId: g.instanceId ?? prev?.instanceId,
       });
     }
     return Array.from(map.values()).sort((a, b) => a.id.localeCompare(b.id));
@@ -395,7 +397,7 @@ export default function DataGroupsPage() {
       <div className="table-wrapper">
         <table>
           <thead>
-            <tr><th>Group ID</th><th>Backends</th><th>Sync</th><th>Actions</th></tr>
+            <tr><th>Group ID</th><th>Instance ID</th><th>Backends</th><th>Sync</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {rows.map(row => {
@@ -411,6 +413,13 @@ export default function DataGroupsPage() {
                     {row.name && <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--text-muted)' }}>{row.name}</span>}
                     {g?.error && <span className="badge badge-danger" style={{ marginLeft: 6 }}>error</span>}
                     {!g && <span className="badge" style={{ marginLeft: 6, background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>未激活</span>}
+                  </td>
+                  <td>
+                    <GroupInstanceId
+                      id={row.instanceId}
+                      label=""
+                      missingHint={g ? '组已激活但未返回 instanceId' : '组未激活，描述符里也没有 instanceId（首次激活时生成）'}
+                    />
                   </td>
                   <td>
                     {backends.length === 0 && (
@@ -482,7 +491,7 @@ export default function DataGroupsPage() {
               );
             })}
             {rows.length === 0 && (
-              <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+              <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
                 No data groups. Create one to sync app data between its backends.
               </td></tr>
             )}

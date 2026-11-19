@@ -14,12 +14,29 @@ import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:data-groups');
 
+/** 组句柄的实例身份；老版本句柄没有该方法时返回 undefined（不影响激活）。 */
+function groupInstanceId(group: unknown): string | undefined {
+  try {
+    const fn = (group as { getGroupInstanceId?: () => string | undefined } | null | undefined)?.getGroupInstanceId;
+    if (typeof fn !== 'function') return undefined;
+    const value = fn.call(group);
+    return typeof value === 'string' && value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 一个已激活的数据同步组在 UI 侧的视图。 */
 export interface DataGroupInfo {
   /** 组 id（等于 `.config/app-data-groups/{appId}/{id}.json` 的文件名）。 */
   id: string;
   /** 用户可编辑的显示名（来自描述符）。 */
   name?: string;
+  /**
+   * 组实例身份（UUID，来自组自己的 `.meta/group.json`；组未激活时回退到描述符
+   * 里的副本）。这是同步边界：instanceId 不同的两个组不建同步对。
+   */
+  instanceId?: string;
   /** 组句柄；只在内部使用，UI 通过 context 字段与 helper 访问。 */
   group: AppDataGroup;
   /**
@@ -55,12 +72,20 @@ export async function activateDataGroup(
     const backendStates = Array.from(group.getBackendSyncStates().values());
     const connected = backendStates.filter(s => s.pairId && !s.error).length;
     log.log(`[data-groups] activated "${id}" (${backends.length} declared, ${connected} connected)`);
-    return { id, name: descriptor?.name, group, backends, backendStates };
+    return {
+      id,
+      name: descriptor?.name,
+      instanceId: groupInstanceId(group) ?? descriptor?.instanceId,
+      group,
+      backends,
+      backendStates,
+    };
   } catch (err: any) {
     log.error(`[data-groups] failed to activate "${id}":`, err?.message ?? err);
     return {
       id,
       name: descriptor?.name,
+      instanceId: descriptor?.instanceId,
       group: null as unknown as AppDataGroup,
       backends: descriptor?.backends ?? [],
       backendStates: [],

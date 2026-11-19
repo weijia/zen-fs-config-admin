@@ -15,6 +15,7 @@ import { useSyncTarget } from '../context/SyncTargetContext';
 import { targetKindLabel } from '../sync-target';
 import { OPEN_STAGE_LABELS } from '../open-progress';
 import AppInstanceManager from './AppInstanceManager';
+import GroupInstanceId from './GroupInstanceId';
 
 function stateDotClass(state: string): string {
   if (state === 'open') return 'open';
@@ -30,6 +31,7 @@ export default function SyncGroupSelector() {
     selected,
     selectedKey,
     selectedOption,
+    instanceId,
     opening,
     openProgress,
     error,
@@ -94,7 +96,7 @@ export default function SyncGroupSelector() {
         key={option.key}
         className={rowClass(isCurrent)}
         onClick={() => selectTarget(option.key)}
-        title={option.error ?? option.detail}
+        title={`${option.error ?? option.detail}${option.instanceId ? ` · 组 ID: ${option.instanceId}` : ''}`}
       >
         <span className={`sync-target-dot ${isCurrent && opening ? 'opening' : stateDotClass(option.openState)}`} />
         <span style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
@@ -103,7 +105,10 @@ export default function SyncGroupSelector() {
           </span>
           <span className="sync-target-name">{option.label}</span>
         </span>
-        <span className="sync-target-detail">{isCurrent && opening ? '正在打开…' : option.detail}</span>
+        <span className="sync-target-detail" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {isCurrent && opening ? '正在打开…' : option.detail}
+          <GroupInstanceId id={option.instanceId} prefix=" · " />
+        </span>
       </div>
     );
   };
@@ -121,7 +126,7 @@ export default function SyncGroupSelector() {
           selectTarget(option.key);
           setOpen(false);
         }}
-        title={`${invalid ? option.error : option.detail}${option.ref.appId ? ` · appId: ${option.ref.appId}` : ''}`}
+        title={`${invalid ? option.error : option.detail}${option.ref.appId ? ` · appId: ${option.ref.appId}` : ''}${option.instanceId ? ` · 组 ID: ${option.instanceId}` : ''}`}
         aria-disabled={invalid}
       >
         <span className={`sync-target-dot ${isOpening ? 'opening' : stateDotClass(option.openState)}`} />
@@ -135,6 +140,7 @@ export default function SyncGroupSelector() {
         <span className="sync-target-detail">
           {isOpening ? '正在打开…（首次同步可能需要几十秒）' : option.detail}
         </span>
+        <GroupInstanceId id={option.instanceId} prefix=" · " />
         {invalid && (
           <button
             className="btn btn-sm btn-danger"
@@ -171,6 +177,7 @@ export default function SyncGroupSelector() {
         </span>
         {!configSelected && <span className="sync-target-appid">{selected.appId}</span>}
         <span className="sync-target-trigger-label">{triggerLabel}</span>
+        <GroupInstanceId id={instanceId} />
         {opening && (
           <span style={{ fontSize: 11, color: 'var(--warning)' }}>
             {openProgress ? `${OPEN_STAGE_LABELS[openProgress.stage]}…` : '打开中…'}

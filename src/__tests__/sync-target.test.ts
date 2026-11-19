@@ -16,6 +16,7 @@ function entry(appId: string, id: string, overrides: Partial<DataGroupOverviewEn
     descriptorId: id,
     name: `${id} 组`,
     groupType: 'data-sync',
+    instanceId: null,
     backendsCount: 2,
     backendsSource: 'data-group',
     bootstrapBackends: [],

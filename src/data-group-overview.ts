@@ -35,6 +35,11 @@ export interface DataGroupOverviewEntry {
   name: string | null;
   /** 描述符 `groupType`；缺失或无法解析时为 null。 */
   groupType: string | null;
+  /**
+   * 描述符里声明的组实例身份（`instanceId`，同步边界用）。缺失 / 老仓库为 null；
+   * 已激活组的权威值请用组句柄的 `getGroupInstanceId()`。
+   */
+  instanceId: string | null;
   /** 后端数量：优先取数据组自己的权威声明数，无权威来源时回退描述符里的引导副本。 */
   backendsCount: number;
   /**
@@ -108,6 +113,7 @@ async function readDescriptor(
     descriptorId: null,
     name: null,
     groupType: null,
+    instanceId: null,
     backendsCount: 0,
     backendsSource: 'bootstrap',
     bootstrapBackends: [],
@@ -139,6 +145,7 @@ async function readDescriptor(
     ...base,
     descriptorId,
     groupType,
+    instanceId: typeof parsed.instanceId === 'string' && parsed.instanceId ? parsed.instanceId : null,
     name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : null,
     backendsCount: typeof authoritativeCount === 'number' ? authoritativeCount : bootstrapBackends.length,
     backendsSource: typeof authoritativeCount === 'number' ? 'data-group' : 'bootstrap',
