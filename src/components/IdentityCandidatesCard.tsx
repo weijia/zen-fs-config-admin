@@ -64,14 +64,19 @@ export default function IdentityCandidatesCard({ handle, onChanged }: IdentityCa
       return;
     }
     try {
+      // 优先用「现场回读」版本：同步 getter 只有缓存，本地已定身份时
+      // 它就只返回本地一个值，界面上看不出与远端的分歧。
+      const fresh = (handle as Partial<SyncGroupHandle>).getIdentityCandidatesAsync;
       const fn = (handle as Partial<SyncGroupHandle>).getIdentityCandidates;
-      if (typeof fn !== 'function') {
+      if (typeof fresh !== 'function' && typeof fn !== 'function') {
         setCandidates([]);
         setUnsettled(false);
         setReadError('');
         return;
       }
-      const list = await Promise.resolve(fn.call(handle));
+      const list = typeof fresh === 'function'
+        ? await Promise.resolve(fresh.call(handle))
+        : await Promise.resolve(fn!.call(handle));
       setCandidates(Array.isArray(list) ? list : []);
       const flag = (handle as Partial<SyncGroupHandle>).isIdentityUnsettled;
       setUnsettled(typeof flag === 'function' ? !!flag.call(handle) : false);
