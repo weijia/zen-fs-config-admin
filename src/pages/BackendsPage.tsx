@@ -9,6 +9,7 @@ import {
   backendConnectionText,
   describeBackendConnection,
   describeBackendScope,
+  formatConflictSide,
   resolveScopedBackends,
   scopeCapabilities,
   type DeclaredBackendRow,
@@ -18,7 +19,7 @@ import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:backends');
 
-function ConnectionBadge({ row }: { row: Pick<DeclaredBackendRow, 'connection' | 'errorMessage' | 'skipReason'> }) {
+function ConnectionBadge({ row }: { row: Pick<DeclaredBackendRow, 'connection' | 'errorMessage' | 'skipReason' | 'conflict'> }) {
   const color = row.skipReason
     ? 'var(--warning, #b8860b)'
     : row.connection === 'connected'
@@ -27,9 +28,19 @@ function ConnectionBadge({ row }: { row: Pick<DeclaredBackendRow, 'connection' |
         ? 'var(--danger)'
         : 'var(--text-muted)';
   return (
-    <span title={row.skipReason ?? row.errorMessage} style={{ fontSize: 12, color }}>
-      {backendConnectionText(row)}
-    </span>
+    <div>
+      <span title={row.skipReason ?? row.errorMessage} style={{ fontSize: 12, color }}>
+        {backendConnectionText(row)}
+      </span>
+      {row.conflict && (
+        <div style={{
+          marginTop: 4, fontSize: 11, lineHeight: 1.6, fontFamily: 'var(--font-mono)',
+          color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+        }}>
+          {`远端根：${formatConflictSide(row.conflict.remote)}\n本组：${formatConflictSide(row.conflict.local)}`}
+        </div>
+      )}
+    </div>
   );
 }
 

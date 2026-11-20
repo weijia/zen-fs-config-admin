@@ -1,4 +1,9 @@
-import type { AppDataBackendDescriptor, BackendSyncState, SyncGroupHandle } from 'zen-fs-config';
+import type {
+  AppDataBackendDescriptor,
+  BackendConflictInfo,
+  BackendSyncState,
+  SyncGroupHandle,
+} from 'zen-fs-config';
 
 /** 当前同步组的类型：配置同步组 / 数据同步组。 */
 export type BackendScopeKind = 'config' | 'data';
@@ -14,6 +19,19 @@ export interface DeclaredBackendRow extends AppDataBackendDescriptor {
    * 只靠状态会显示成「未处理」——把库里的跳过原因透到 UI，用户才知道为什么没有数据。
    */
   skipReason?: string;
+  /**
+   * 结构化归属冲突：两侧 `kind` / `id` / `instanceId` 全量快照。
+   * 老版本库只给 `listSkippedBackends()` 时为空，此时只能显示一句话原因。
+   */
+  conflict?: BackendConflictInfo;
+}
+
+/** 一侧身份的可读串（instanceId 给全值，便于跨环境核对）。 */
+export function formatConflictSide(
+  side: { kind?: string; id?: string; instanceId?: string } | null | undefined,
+): string {
+  if (!side) return '（读不到远端 group.json）';
+  return `kind=${side.kind ?? '（无）'} · id=${side.id ?? '（无）'} · 实例 ID=${side.instanceId ?? '（无）'}`;
 }
 
 /** 当前作用域是否提供编辑能力（配置组与数据组都可写，写的是各自的后端定义）。 */
@@ -36,7 +54,7 @@ export interface BackendScopeView {
 type DeclaredBackendHandle = Pick<
   SyncGroupHandle,
   'listDeclaredBackends' | 'getBackendSyncStates'
-> & Partial<Pick<SyncGroupHandle, 'listSkippedBackends'>>;
+> & Partial<Pick<SyncGroupHandle, 'listSkippedBackends' | 'listBackendConflicts'>>;
 
 /**
  * 把后端同步状态归一成三态：
@@ -83,11 +101,19 @@ export function collectDeclaredBackends(
   const skipped = new Map(
     (handle.listSkippedBackends?.() ?? []).map(s => [s.backendId, s.reason] as const),
   );
-  return handle.listDeclaredBackends().map((backend) => ({
-    ...backend,
-    ...describeBackendConnection(states.get(backend.id)),
-    ...(skipped.has(backend.id) ? { skipReason: skipped.get(backend.id) } : {}),
-  }));
+  const conflicts = new Map(
+    (handle.listBackendConflicts?.() ?? []).map(c => [c.backendId, c] as const),
+  );
+  return handle.listDeclaredBackends().map((backend) => {
+    const conflict = conflicts.get(backend.id);
+    const skipReason = skipped.get(backend.id) ?? conflict?.reason;
+    return {
+      ...backend,
+      ...describeBackendConnection(states.get(backend.id)),
+      ...(skipReason ? { skipReason } : {}),
+      ...(conflict ? { conflict } : {}),
+    };
+  });
 }
 
 /** 数据组后端列表的来源。 */
