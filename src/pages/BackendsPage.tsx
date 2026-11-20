@@ -15,6 +15,7 @@ import {
   type DeclaredBackendRow,
 } from '../backend-scope';
 import { targetKey } from '../sync-target';
+import IdentityCandidatesCard from '../components/IdentityCandidatesCard';
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:backends');
@@ -365,6 +366,15 @@ export default function BackendsPage() {
         </div>
       </div>
       {message && <div style={{ marginBottom: 16, color: 'var(--success)', fontSize: 13 }}>{message}</div>}
+
+      <IdentityCandidatesCard
+        handle={targetHandle}
+        onChanged={() => {
+          if (!isDataScope) return;
+          if (selected.appId === 'admin') void refreshDataGroups();
+          else void refreshInstance(selected.appId);
+        }}
+      />
 
       {isDataScope && (
         <section style={{ marginBottom: 32 }}>
