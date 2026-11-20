@@ -27,7 +27,7 @@ export interface GroupInstanceIdProps {
 
 export default function GroupInstanceId({
   id,
-  label = '组 ID',
+  label = '实例 ID',
   prefix,
   missingHint = '该组尚未写入 .meta/group.json（首次激活时生成）',
 }: GroupInstanceIdProps) {

@@ -279,7 +279,7 @@ export default function AppInstanceManager({ appId, onClose }: { appId: string; 
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
           <span className="badge badge-primary">{appId}</span>
           <span>远端后端：{instance.backendId}</span>
-          <GroupInstanceId id={repoInstanceId(instance.repo)} label="配置组 ID" />
+          <GroupInstanceId id={repoInstanceId(instance.repo)} label="配置组实例 ID" />
           <span>已加载组：{status?.groupCount ?? 0}（激活 {status?.activeGroupCount ?? 0}）</span>
           <span>同步对：{status?.pairCount ?? 0} · {status?.watchingCount ? '同步中' : '未在同步'}</span>
           <span style={{ color: 'var(--text-muted)' }}>使用独立实例，可释放</span>
