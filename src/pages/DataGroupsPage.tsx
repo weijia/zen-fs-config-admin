@@ -216,8 +216,21 @@ export default function DataGroupsPage() {
       setTimeout(() => setConfirmRemove(null), 3000);
       return;
     }
-    setBusy(true);
     setConfirmRemove(null);
+    // 删除组登记会写墓碑并同步到远端：其它设备也会失去这个组，必须说清楚。
+    const confirmed = window.confirm(
+      [
+        `删除数据同步组「${id}」：`,
+        '',
+        `· 配置仓远端（Gitee / RemoteStorage 等）的 .config/app-data-groups/${appId}/${id}.json 会被删除（写墓碑并同步）`,
+        '· 其它设备同步后也会失去该组配置',
+        '· 组内后端的数据文件不会被搬运或删除，组自己的远端仓库保持原样',
+        '',
+        '确定继续？',
+      ].join('\n'),
+    );
+    if (!confirmed) return;
+    setBusy(true);
     try {
       await repo.removeAppDataGroup(id);
       notify(`Data group "${id}" removed`);
