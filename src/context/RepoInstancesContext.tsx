@@ -156,6 +156,14 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
           [update.appId]: { stage: update.stage, detail: update.detail, pairs: update.pairs },
         }));
       },
+      onEvicted: (appId, reason) => {
+        // 满额自动腾名额：告诉用户被关掉的是谁，避免「实例莫名消失」。
+        setErrors(prev => ({
+          ...prev,
+          [appId]: `已自动释放实例「${appId}」（${reason}）；需要时重新打开即可。`,
+        }));
+        setRevision(v => v + 1);
+      },
       getRemoteBackend: async () => {
         const adminRepo = adminRepoRef.current;
         // 冷启动 / Reconnect 期间 admin 配置仓还没就绪：这是暂时状态，不应误报成「没有后端」。

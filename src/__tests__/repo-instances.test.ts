@@ -226,14 +226,51 @@ describe('RepoInstanceRegistry', () => {
     expect(repo.getAppDataGroup).toHaveBeenCalledTimes(2);
   });
 
-  it('并发上限：超出时提示先释放，且不会创建新 repo', async () => {
-    const { registry, created } = makeRegistry({ maxInstances: 3 });
+  it('并发上限：满额时自动释放最久未使用的实例，不会卡住打开', async () => {
+    const evicted: string[] = [];
+    const created: FakeRepo[] = [];
+    const registry = new RepoInstanceRegistry({
+      createRepo: async (appId) => {
+        const repo = makeFakeRepo(appId);
+        created.push(repo);
+        return repo as unknown as IConfigRepo;
+      },
+      getRemoteBackend: async () => OK_LOOKUP,
+      maxInstances: 3,
+      onEvicted: (appId) => { evicted.push(appId); },
+    });
+
     await registry.create('a');
     await registry.create('b');
     await registry.create('c');
+    // 触碰 b/c，让 a 成为「最久未使用」的那个。
+    await registry.refresh('b');
+    await registry.refresh('c');
 
-    await expect(registry.create('d')).rejects.toThrow(/实例数量已达上限（3）/);
-    expect(created.map(r => r.appId)).toEqual(['a', 'b', 'c']);
+    const d = await registry.create('d');
+    expect(d.appId).toBe('d');
+    expect(evicted).toEqual(['a']);
+    expect(registry.has('a')).toBe(false);
+    expect(registry.has('d')).toBe(true);
+    expect(registry.size).toBe(3);
+    // 自动释放也走 flush → dispose。
+    const repoA = created.find(r => r.appId === 'a')!;
+    expect(repoA.calls).toContain('flush');
+    expect(repoA.calls).toContain('dispose');
+  });
+
+  it('自动释放失败（flush 抛错）时保留实例并给出可操作错误', async () => {
+    const { registry, created } = makeRegistry({ maxInstances: 3 });
+
+    await registry.create('a');
+    await registry.create('b');
+    await registry.create('c');
+    // 建好之后再让 a 的 flush 失败（模拟真实 release 阶段的落盘失败）。
+    created[0].flush.mockImplementation(async () => { throw new Error('disk full'); });
+
+    await expect(registry.create('d')).rejects.toThrow(/自动释放「a」失败.*disk full/);
+    expect(registry.has('a')).toBe(true);
+    expect(registry.has('d')).toBe(false);
   });
 
   it('释放：先 flush 再 dispose，释放后回到未创建状态，可再次创建', async () => {

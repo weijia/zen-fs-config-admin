@@ -7,7 +7,8 @@
  *   · 每个实例用自己 appId 的本地主存储（createConfigRepo 内部按
  *     `zen-fs-config-config-{appId}` 派生），并连接与 admin 相同的远端
  *     配置仓，从而同步到该 appId 的组描述符与后端配置；
- *   · 并发实例数有上限（默认 3），超出时明确提示先释放；
+ *   · 并发实例数有上限（默认 3）；满额时自动释放「最久未使用」的一个实例
+ *     （先 flush 再断开，与手动释放同一套流程），只有自动释放失败才提示手动释放；
  *   · 释放必须先 flush，再断开，避免未落盘改动丢失；
  *   · 组管理写操作一律走该实例的 repo / group API，不直接写 fs。
  */
@@ -53,6 +54,8 @@ export interface RepoInstance {
   backendId: string;
   /** 创建时间（ms）。 */
   createdAt: number;
+  /** 最近一次被使用的时间（ms），用于满额时的 LRU 释放。 */
+  lastUsedAt: number;
 }
 
 /** 实例的运行状态快照（用于 UI 展示）。 */
@@ -82,8 +85,13 @@ export interface RepoInstanceRegistryOptions {
    * 状态汇总的计数（库没有逐文件进度）。回调抛错不影响打开流程。
    */
   onProgress?: (update: OpenProgressUpdate) => void;
-  /** 并发实例上限，默认 3。 */
+  /** 并发实例上限，默认 3；满额时自动释放最久未使用的实例。 */
   maxInstances?: number;
+  /**
+   * 自动释放实例后的通知（满额腾名额时触发）。
+   * 注册表只负责关闭实例，UI 提示由调用方决定。
+   */
+  onEvicted?: (appId: string, reason: string) => void;
 }
 
 function messageOf(err: unknown): string {
@@ -140,6 +148,26 @@ export class RepoInstanceRegistry {
     return this.instances.size;
   }
 
+  /**
+   * 满额时要释放的实例：最近最少使用（lastUsedAt 最小）的那个。
+   * 不释放正在请求的 appId 本身，也不碰正在创建中的实例。
+   */
+  private pickEvictionCandidate(requestedAppId: string): string | undefined {
+    let victim: RepoInstance | undefined;
+    for (const inst of this.instances.values()) {
+      if (inst.appId === requestedAppId) continue;
+      if (this.pending.has(inst.appId)) continue;
+      if (!victim || inst.lastUsedAt < victim.lastUsedAt) victim = inst;
+    }
+    return victim?.appId;
+  }
+
+  /** 记一次使用（LRU 依据）。 */
+  private touch(appId: string): void {
+    const inst = this.instances.get(appId);
+    if (inst) inst.lastUsedAt = Date.now();
+  }
+
   /** 实例是否已创建。 */
   has(appId: string): boolean {
     return this.instances.has(appId);
@@ -167,7 +195,10 @@ export class RepoInstanceRegistry {
     }
 
     const existing = this.instances.get(appId);
-    if (existing) return existing;
+    if (existing) {
+      existing.lastUsedAt = Date.now();
+      return existing;
+    }
 
     // 同一 appId 的创建请求合并（不同组的并发请求也只会建一个 repo）。
     const inFlight = this.pending.get(appId);
@@ -183,11 +214,29 @@ export class RepoInstanceRegistry {
   private async doCreate(appId: string, onlyGroupId?: string | null): Promise<RepoInstance> {
     if (appId === 'admin') throw new Error('admin 实例不由注册表管理');
 
-    if (this.instances.size >= this.maxInstances) {
-      const active = Array.from(this.instances.keys()).join('、');
-      throw new Error(
-        `实例数量已达上限（${this.maxInstances}），请先释放一个实例：${active || '（无）'}`,
-      );
+    // 满额时先自动释放最久未使用的实例（先 flush 再断开），避免用户被
+    // 「请先释放一个实例」卡住；只有释放本身失败才把错误抛回去。
+    while (this.instances.size >= this.maxInstances) {
+      const victim = this.pickEvictionCandidate(appId);
+      if (!victim) {
+        const active = Array.from(this.instances.keys()).join('、');
+        throw new Error(
+          `实例数量已达上限（${this.maxInstances}），请先释放一个实例：${active || '（无）'}`,
+        );
+      }
+      try {
+        await this.release(victim);
+      } catch (err) {
+        throw new Error(
+          `实例数量已达上限（${this.maxInstances}），自动释放「${victim}」失败：${messageOf(err)}；` +
+          '请手动释放一个实例后重试',
+        );
+      }
+      try {
+        this.options.onEvicted?.(victim, `为打开「${appId}」腾出名额`);
+      } catch {
+        /* 通知失败不影响创建 */
+      }
     }
 
     let lookup: RemoteBackendLookup;
@@ -257,6 +306,7 @@ export class RepoInstanceRegistry {
         groups,
         backendId: backend.id,
         createdAt: Date.now(),
+        lastUsedAt: Date.now(),
       };
       this.instances.set(appId, instance);
       // 自愈：旧版本 / 竞态可能让配置组副本落后于组内声明，以组内为准重写副本。
@@ -496,6 +546,7 @@ export class RepoInstanceRegistry {
     if (!instance) {
       throw new Error(`实例「${appId}」尚未打开，请先在顶栏同步组选择器中选择该组。`);
     }
+    this.touch(appId);
     return instance;
   }
 
