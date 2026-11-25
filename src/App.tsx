@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigRepoProvider, useConfigRepo } from './context/ConfigRepoContext';
 import { RepoInstancesProvider } from './context/RepoInstancesContext';
 import { SyncTargetProvider } from './context/SyncTargetContext';
@@ -41,7 +41,7 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <ConfigRepoProvider>
         <RepoInstancesProvider>
           <SyncTargetProvider>
@@ -50,6 +50,6 @@ export default function App() {
         </RepoInstancesProvider>
         <UpdateToast />
       </ConfigRepoProvider>
-    </BrowserRouter>
+    </HashRouter>
   );
 }

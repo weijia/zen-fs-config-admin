@@ -33,6 +33,16 @@ Object.entries(deps).forEach(([name, ver]) => {
 log.log('To enable RemoteStorage debug logging, run:');
 log.log('  window.__RS_DEBUG = true');
 
+// 路由已改为 hash 模式（`/#/files`）：静态服务器把 `/dashboard` 当成子目录
+// 下的文件去取，既会 404 也会在日志里刷出不存在的路径。这里把老的 path 链接
+// 一次性搬到 hash 形式，保证旧书签/旧分享链接继续可用。
+(function migrateLegacyPathRoute() {
+  const { pathname, search, hash } = window.location;
+  if (hash) return;
+  if (pathname === '/' || pathname === '/index.html') return;
+  window.location.replace(`${window.location.origin}/#${pathname}${search}`);
+})();
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
