@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useConfigRepo } from '../context/ConfigRepoContext';
 import { useSyncTarget } from '../context/SyncTargetContext';
+import { useRepoInstances } from '../context/RepoInstancesContext';
 import { OPEN_STAGE_LABELS } from '../open-progress';
 import SyncGroupSelector from './SyncGroupSelector';
 import { versionDisplay, buildTimeDisplay } from '../version';
@@ -19,6 +20,7 @@ const navItems = [
 export default function Layout() {
   const { repo, connected, reconnect, reconnecting } = useConfigRepo();
   const { ready, opening, openProgress, error, retry, switchToAdmin, selected, selectedKey, selectedOption, getSyncStatuses } = useSyncTarget();
+  const { notices, dismissNotice } = useRepoInstances();
   const [vConsoleLoaded, setVConsoleLoaded] = useState(false);
 
   const statuses = ready ? getSyncStatuses() : new Map();
@@ -61,6 +63,15 @@ export default function Layout() {
           )}
         </div>
       </div>
+
+      {notices.map(n => (
+        <div key={n.id} className="sync-error-bar" style={{ background: 'var(--warning-bg, #3a3220)', color: 'var(--text, #ddd)' }}>
+          <span>{n.text}</span>
+          <span style={{ marginLeft: 'auto' }}>
+            <button className="btn btn-sm btn-secondary" onClick={() => dismissNotice(n.id)}>知道了</button>
+          </span>
+        </div>
+      ))}
 
       {error && (
         <div className="sync-error-bar">

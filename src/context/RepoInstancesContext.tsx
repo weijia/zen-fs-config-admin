@@ -56,6 +56,10 @@ interface RepoInstancesContextValue {
   instances: RepoInstanceView[];
   /** appId → 最近一次失败原因（创建 / 释放 / 组操作）。 */
   errors: Record<string, string>;
+  /** 中性提示（例如「为腾名额自动关闭了哪个实例」），不是失败。 */
+  notices: { id: number; text: string }[];
+  /** 关掉一条提示。 */
+  dismissNotice: (id: number) => void;
   /** appId → 是否正在创建。 */
   creating: Record<string, boolean>;
   /** 版本号：实例 / 组发生变化时递增，供文件树刷新总览。 */
@@ -101,6 +105,8 @@ interface RepoInstancesContextValue {
 const Context = createContext<RepoInstancesContextValue>({
   instances: [],
   errors: {},
+  notices: [],
+  dismissNotice: () => {},
   creating: {},
   revision: 0,
   openProgress: {},
@@ -139,6 +145,9 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   /** appId → 打开阶段（阶段与计数来自注册表 / repo 的真实信号）。 */
   const [openProgress, setOpenProgress] = useState<Record<string, OpenProgressStage>>({});
+  /** 中性提示（自动腾名额之类），与 errors 分开，避免被渲染成「打开失败」。 */
+  const [notices, setNotices] = useState<{ id: number; text: string }[]>([]);
+  const noticeSeq = useRef(0);
 
   const registryRef = useRef<RepoInstanceRegistry | null>(null);
   if (!registryRef.current) {
@@ -158,11 +167,12 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
       },
       onEvicted: (appId, reason) => {
         // 满额自动腾名额：告诉用户被关掉的是谁，避免「实例莫名消失」。
-        setErrors(prev => ({
-          ...prev,
-          [appId]: `已自动释放实例「${appId}」（${reason}）；需要时重新打开即可。`,
-        }));
-        setRevision(v => v + 1);
+        // 走 notices 而不是 errors —— 这不是打开失败。
+        const id = ++noticeSeq.current;
+        setNotices(prev => [...prev, {
+          id,
+          text: `实例「${appId}」已自动关闭（${reason}），需要时重新打开即可`,
+        }]);
       },
       getRemoteBackend: async () => {
         const adminRepo = adminRepoRef.current;
@@ -230,6 +240,10 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
       bump();
     }
   }, [registry, bump, clearError, recordError]);
+
+  const dismissNotice = useCallback((id: number) => {
+    setNotices(prev => prev.filter(n => n.id !== id));
+  }, []);
 
   const getInstance = useCallback((appId: string) => registry.get(appId), [registry]);
   const getStatus = useCallback((appId: string) => registry.status(appId), [registry]);
@@ -316,6 +330,8 @@ export function RepoInstancesProvider({ children }: { children: ReactNode }) {
     <Context.Provider value={{
       instances,
       errors,
+      notices,
+      dismissNotice,
       creating,
       revision,
       openProgress,
