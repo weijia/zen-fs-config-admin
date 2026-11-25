@@ -556,5 +556,12 @@ registerBackend('RemoteStorage', async (options) => {
   // identity = the RemoteStorage account + subtree. Client tuning (syncRootPath,
   // timeout, persistCache, ...) is excluded so two connections to the same
   // endpoint with different tuning are deduplicated as one replica.
-  identityFields: ['href', 'token', 'basePath'],
+  //
+  // `token` is intentionally NOT part of the identity: the same account/volume
+  // can be authorized with several bearer tokens (one per app/session), and
+  // including the token made every re-authorization look like a brand-new
+  // backend — the descriptor list grew a new `remotestorage-<timestamp>` entry
+  // on each connect. Credentials are reconciled at connect time instead
+  // (the working token is written back into duplicate descriptors).
+  identityFields: ['href', 'basePath'],
 });
