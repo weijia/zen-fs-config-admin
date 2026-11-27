@@ -15,6 +15,7 @@ import {
   type DeclaredBackendRow,
 } from '../backend-scope';
 import { targetKey } from '../sync-target';
+import { APP_DATA_GROUPS_DIR, LEGACY_APP_DATA_GROUPS_DIR } from '../data-group-overview';
 import IdentityCandidatesCard from '../components/IdentityCandidatesCard';
 import { createLogger } from '@richard432/localstorage-logger';
 
@@ -47,7 +48,7 @@ function ConnectionBadge({ row }: { row: Pick<DeclaredBackendRow, 'connection' |
 
 export default function BackendsPage() {
   const { repo, reconnect, primaryBackendId, refreshDataGroups } = useConfigRepo();
-  const { replaceBackend, refreshInstance } = useRepoInstances();
+  const { replaceBackend, refreshInstance, removeGroup } = useRepoInstances();
   const {
     selected,
     selectedOption,
@@ -326,6 +327,96 @@ export default function BackendsPage() {
     }
   };
 
+  /**
+   * 只删配置仓里的「登记」：描述符 + 该组在该 appId 下的后端引导副本。
+   * 全部走 repo.deleteFile（写墓碑），远端副本不会把它拉回来；组内数据不动。
+   *
+   * 只用 IConfigRepo 的公开能力，兼容旧版库（不依赖 removeAppDataGroup 的 appId 参数）。
+   */
+  const removeGroupRegistration = useCallback(async (appId: string, groupId: string) => {
+    if (!repo) return;
+    const backendsDir = `${APP_DATA_GROUPS_DIR}/${appId}/backends`;
+    let entries: string[] = [];
+    try {
+      entries = (await repo.rootFS.promises.readdir(backendsDir)) as unknown as string[];
+    } catch { /* 目录不存在 = 没有后端引导副本 */ }
+
+    for (const name of entries) {
+      if (!name.endsWith('.json') || name.endsWith('.version')) continue;
+      const path = `${backendsDir}/${name}`;
+      try {
+        const raw = await repo.rootFS.promises.readFile(path);
+        const parsed = JSON.parse(new TextDecoder().decode(raw as any));
+        // 只删归属本组的；同目录其它组的后端不碰。
+        if (parsed?.groupId !== groupId) continue;
+      } catch { continue; }
+      try { await repo.deleteFile(path); } catch (err: any) {
+        log.warn('[BackendsPage] delete backend descriptor failed:', path, err?.message);
+      }
+    }
+
+    for (const path of [
+      `${APP_DATA_GROUPS_DIR}/${appId}/${groupId}.json`,
+      `${LEGACY_APP_DATA_GROUPS_DIR}/${appId}/${groupId}.json`,
+    ]) {
+      try { await repo.deleteFile(path); } catch { /* 不存在或已删 */ }
+    }
+  }, [repo]);
+
+  /**
+   * 删除一个数据同步组的登记（在 backends 页直接操作）。
+   *
+   * 只删「配置仓里的登记」——`.config/app-data-groups/{appId}/{groupId}.json`
+   * 和该组在配置仓的后端描述符，全部走 deleteFile 写墓碑，避免远端副本把它
+   * 拉回来。组自身后端上的数据文件一律不碰。
+   */
+  const handleRemoveGroup = async (appId: string, groupId: string) => {
+    if (!repo) return;
+    const confirmed = window.confirm(
+      [
+        `删除数据同步组「${groupId}」（appId=${appId}）：`,
+        '',
+        `· 配置仓 .config/app-data-groups/${appId}/${groupId}.json 会被删除（写墓碑并同步到远端）`,
+        '· 该组在配置仓的后端描述符（引导副本）一并删除',
+        '· 其它设备同步后也会失去这条登记',
+        '· 组内后端上的数据文件不会被删除或搬运，该组自己的远端仓库保持原样',
+        '',
+        '确定继续？',
+      ].join('\n'),
+    );
+    if (!confirmed) return;
+
+    try {
+      if (appId === 'admin') {
+        // admin 自己的组：走库的完整删除（顺手 dispose 组句柄）。
+        await repo.removeAppDataGroup(groupId).catch(async (err: any) => {
+          log.warn('[BackendsPage] removeAppDataGroup failed, deleting descriptor only:', err?.message);
+          await removeGroupRegistration(appId, groupId);
+        });
+        await refreshDataGroups();
+      } else {
+        try {
+          // 该 appId 的实例已打开：交给注册表，组句柄会被正确 dispose。
+          await removeGroup(appId, groupId);
+        } catch (err: any) {
+          // 实例没打开（或组未激活）：直接从配置仓删那条登记，同样写墓碑。
+          log.warn('[BackendsPage] removeGroup failed, deleting descriptor only:', err?.message);
+          await removeGroupRegistration(appId, groupId);
+          await refreshDataGroups();
+        }
+      }
+      // 删的正好是当前打开的组 → 切回配置仓作用域，别继续操作已销毁的句柄。
+      if (selected.kind === 'data' && selected.appId === appId && selected.groupId === groupId) {
+        selectTarget(targetKey({ kind: 'config', appId: 'admin', groupId: null }));
+      }
+      setMessage(`Removed data group ${appId}/${groupId}`);
+      setTimeout(() => setMessage(''), 4000);
+    } catch (err: any) {
+      setMessage(`Failed to remove group: ${err?.message ?? err}`);
+      setTimeout(() => setMessage(''), 6000);
+    }
+  };
+
   if (!repo) return <div className="loading">No repo connected</div>;
 
   const def = getBackendTypeDef(formState.type);
@@ -479,10 +570,11 @@ export default function BackendsPage() {
             <div>
               <div style={{ fontSize: 15, fontWeight: 600 }}>该 appId 已登记的数据组（来自配置仓）</div>
               <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                只读；列出配置仓 .config/app-data-groups/ 下所有 appId 的登记项，可跳转到对应数据组
+                列出配置仓 .config/app-data-groups/ 下所有 appId 的登记项：可打开对应数据组，
+                也可直接删除登记（写墓碑同步到远端，组内后端的数据文件不动）
               </div>
             </div>
-            <span className="badge">只读</span>
+            <span className="badge">可打开 / 可删除</span>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
             后端数来自描述符里的引导副本；组激活后以组内 .meta/backends/ 为准。
@@ -517,6 +609,14 @@ export default function BackendsPage() {
                             onClick={() => selectTarget(targetKey({ kind: 'data', appId: app.appId, groupId: entry.id }))}
                           >
                             打开
+                          </button>
+                          <button
+                            className="btn btn-sm btn-danger"
+                            style={{ marginLeft: 4 }}
+                            onClick={() => handleRemoveGroup(app.appId, entry.id)}
+                            title="删除这条登记（写墓碑，组内数据不动）"
+                          >
+                            删除
                           </button>
                         </td>
                       </tr>
