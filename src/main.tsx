@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './patch-stat-cache.ts'
 import App from './App.tsx'
 import { version, buildTime, deps } from './version.json'
+import { registerServiceWorker } from './lib/sw-register'
 import { createLogger } from '@richard432/localstorage-logger';
 
 const log = createLogger('admin:main');
@@ -42,6 +43,10 @@ log.log('  window.__RS_DEBUG = true');
   if (pathname === '/' || pathname === '/index.html') return;
   window.location.replace(`${window.location.origin}/#${pathname}${search}`);
 })();
+
+// 手动注册 SW：updateViaCache:'none' 保证每次都向服务器检查 sw.js，
+// 而不是被 HTTP 缓存（CDN/代理）挡住导致永远检测不到新版本。
+registerServiceWorker()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -1,106 +1,153 @@
-import { useState, useEffect } from 'react'
-import { createLogger } from '@richard432/localstorage-logger';
+import { useEffect, useRef, useState } from 'react'
+import { createLogger } from '@richard432/localstorage-logger'
+import { applyUpdate, checkForUpdate, type UpdateCheckResult } from '../lib/update-check'
+import { setUpdateAvailable, versionKey } from '../lib/update-store'
 
-const log = createLogger('admin:update-toast');
+const log = createLogger('admin:update-toast')
 
-// 去重标志：updatefound 和 updated 都可能触发，确保只通知一次
-let updateAvailable = false
+const CHECK_INTERVAL = 5 * 60 * 1000
 
+/**
+ * 自动更新提醒：
+ *  - 页面加载 3 秒后检查一次，之后每 5 分钟检查一次，回到前台时也检查；
+ *  - 走双通道（远端 version.json + SW 的 waiting Worker），SW 坏掉也能发现新版本；
+ *  - 同一个版本点过「稍后」后不再弹提示，但顶部「检查更新」按钮的小圆点会保留。
+ */
 export default function UpdateToast() {
-  const [show, setShow] = useState(false)
+  const [result, setResult] = useState<UpdateCheckResult | null>(null)
+  const [applying, setApplying] = useState(false)
+  const [error, setError] = useState('')
+  const dismissedKey = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!('serviceWorker' in navigator)) return
+    let cancelled = false
+    let lastKey: string | null = null
 
-    const handleUpdate = (reg: ServiceWorkerRegistration) => {
-      reg.addEventListener('updatefound', () => {
-        const newWorker = reg.installing
-        if (!newWorker) return
-
-        newWorker.addEventListener('statechange', () => {
-          // 新 Worker 已安装且等待中，只通知一次
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            if (!updateAvailable) {
-              updateAvailable = true
-              log.log('[PWA] 新版本可用')
-              setShow(true)
-            }
-          }
-        })
-      })
+    const announce = (r: UpdateCheckResult) => {
+      if (cancelled || r.status !== 'update-available') return
+      setUpdateAvailable(r)
+      const key = versionKey(r)
+      if (key === lastKey) return
+      lastKey = key
+      log.log('[PWA] 发现新版本', r.message)
+      if (dismissedKey.current === key) return
+      setError('')
+      setApplying(false)
+      setResult(r)
     }
 
-    // 注册后监听更新
-    navigator.serviceWorker.ready.then((reg) => {
-      handleUpdate(reg)
-      // 3 秒后检查更新
-      setTimeout(() => reg.update().catch(log.error), 3000)
-    })
+    const run = async () => {
+      try {
+        announce(await checkForUpdate())
+      } catch (err) {
+        log.error('[PWA] 自动检查更新失败', err)
+      }
+    }
 
-    // 每 5 分钟轮询
-    const interval = setInterval(() => {
-      navigator.serviceWorker.ready.then((reg) => reg.update().catch(log.error))
-    }, 5 * 60 * 1000)
+    const initial = setTimeout(run, 3000)
+    const interval = setInterval(run, CHECK_INTERVAL)
 
-    return () => clearInterval(interval)
+    // 已有等待中的 Worker（例如上次没点更新就关了页面）→ 立刻提示
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then((reg) => {
+          if (reg.waiting) void run()
+        })
+        .catch(() => {
+          /* 无 SW 时交给 version.json 通道 */
+        })
+    }
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void run()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      cancelled = true
+      clearTimeout(initial)
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [])
 
-  const handleRefresh = async () => {
-    const reg = await navigator.serviceWorker.ready
-    const newWorker = reg.waiting
-    if (newWorker) {
-      // 发送消息让新 SW 跳过等待 —— 需要自定义 SW 监听此消息
-      newWorker.postMessage({ type: 'SKIP_WAITING' })
-      // 新 SW 激活后刷新页面
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        window.location.reload()
-      })
-    }
-    setShow(false)
+  const dismiss = () => {
+    if (result) dismissedKey.current = versionKey(result)
+    setResult(null)
   }
 
-  if (!show) return null
+  const doApply = async () => {
+    setApplying(true)
+    setError('')
+    try {
+      await applyUpdate()
+      // applyUpdate 内部会重载；没重载成功时给出明确提示，避免用户以为卡住
+      setError('更新已下发但页面未自动刷新，请手动刷新页面')
+    } catch (err) {
+      setApplying(false)
+      setError(`应用更新失败：${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  if (!result) return null
+
+  const remoteLabel = result.remote
+    ? `${result.remote.version || result.remote.sha || '新版本'}${result.remote.buildTime ? `（${result.remote.buildTime}）` : ''}`
+    : '后台已下载新版本'
 
   return (
     <div
       style={{
         position: 'fixed',
-        bottom: '40px',
+        bottom: 40,
         left: '50%',
         transform: 'translateX(-50%)',
-        zIndex: 200,
-        animation: 'slideIn 0.2s',
+        zIndex: 300,
+        maxWidth: 'calc(100vw - 32px)',
       }}
     >
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '12px',
+          gap: 14,
           background: 'var(--bg-secondary)',
           color: 'var(--text-primary)',
-          padding: '12px 20px',
-          borderRadius: '8px',
+          padding: '10px 14px',
+          borderRadius: 8,
           border: '1px solid var(--border)',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+          fontSize: 13,
         }}
       >
-        <span style={{ fontSize: '13px' }}>新版本可用</span>
-        <button
-          onClick={handleRefresh}
-          style={{
-            padding: '6px 14px',
-            background: 'var(--accent)',
-            color: '#fff',
-            borderRadius: 'var(--radius)',
-            fontSize: '13px',
-            fontWeight: 500,
-            border: 'none',
-            cursor: 'pointer',
-          }}
-        >
-          点击刷新
-        </button>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ marginBottom: 2 }}>
+            {applying ? '正在应用更新…' : `发现新版本 ${remoteLabel}`}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            本机 {result.local.sha || '?'} · {result.local.buildTime || '未知时间'}
+            {result.remote?.sha ? ` → 远端 ${result.remote.sha}` : ''}
+          </div>
+          {error && (
+            <div style={{ fontSize: 11, color: 'var(--warning, #d29922)', marginTop: 3 }}>{error}</div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={dismiss}
+            disabled={applying}
+          >
+            稍后
+          </button>
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={() => void doApply()}
+            disabled={applying}
+          >
+            {applying ? '更新中…' : '立即更新'}
+          </button>
+        </div>
       </div>
     </div>
   )

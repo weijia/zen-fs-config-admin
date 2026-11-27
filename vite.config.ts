@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import { dirname, join } from 'node:path'
@@ -67,6 +67,26 @@ const staleAssetReload = {
   },
 }
 
+/**
+ * 把 scripts/generate-version.js 生成的 src/version.json 原样放到 dist 根目录，
+ * 供运行中的页面 `fetch('/version.json', {cache:'no-store'})` 主动比对版本，
+ * 不依赖 Service Worker 是否正常工作。
+ * 该文件的 emit 不参与 SW 预缓存（见 injectManifest.globIgnores）。
+ */
+const emitVersionManifest: Plugin = {
+  name: 'emit-version-manifest',
+  apply: 'build',
+  generateBundle() {
+    const src = join(process.cwd(), 'src', 'version.json')
+    if (!existsSync(src)) return
+    this.emitFile({
+      type: 'asset',
+      fileName: 'version.json',
+      source: readFileSync(src, 'utf-8'),
+    })
+  },
+}
+
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -76,14 +96,17 @@ export default defineConfig({
   plugins: [
     react(),
     staleAssetReload,
+    emitVersionManifest,
     VitePWA({
       registerType: 'prompt',
-      injectRegister: 'auto',
+      injectRegister: null,
       strategies: 'injectManifest',
       srcDir: 'src',
       filename: 'sw.ts',
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        // 版本清单必须走网络，不能被 SW 预缓存挡住（否则 no-store 也读到旧清单）
+        globIgnores: ['version.json'],
       },
       manifest: {
         name: 'zen-fs-config-admin',

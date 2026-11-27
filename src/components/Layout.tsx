@@ -5,6 +5,7 @@ import { useSyncTarget } from '../context/SyncTargetContext';
 import { useRepoInstances } from '../context/RepoInstancesContext';
 import { OPEN_STAGE_LABELS } from '../open-progress';
 import SyncGroupSelector from './SyncGroupSelector';
+import UpdateCheckButton from './UpdateCheckButton';
 import { versionDisplay, buildTimeDisplay } from '../version';
 import '../styles/global.css';
 
@@ -47,6 +48,7 @@ export default function Layout() {
           {connected && <SyncGroupSelector />}
         </div>
         <div className="topbar-right">
+          <UpdateCheckButton />
           {connected && repo && (
             <>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
